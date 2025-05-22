@@ -4,24 +4,21 @@
 #include <immintrin.h>
 #include <cstdint>
 
-namespace ripemd160avx512 {
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-// AVX-512 optimized state initialization
-void Initialize(__m512i *state);
+// Pełny batch AVX-512: 16 bloków wejściowych po 64 bajty, 16 hashy po 20 bajtów
+void ripemd160_avx512_16blocks(const uint8_t* in[16], uint8_t* out[16]);
 
-// Process 16 blocks in parallel
-void Transform(__m512i *state, uint8_t *blocks[16]);
+// Batch 8x (wywołuje 16x, resztę zeruje)
+void ripemd160_avx512_8blocks(const uint8_t* in[8], uint8_t* out[8]);
 
-void ripemd160avx512_64(
-    unsigned char *i0, unsigned char *i1, unsigned char *i2, unsigned char *i3,
-    unsigned char *i4, unsigned char *i5, unsigned char *i6, unsigned char *i7,
-    unsigned char *i8, unsigned char *i9, unsigned char *i10, unsigned char *i11,
-    unsigned char *i12, unsigned char *i13, unsigned char *i14, unsigned char *i15,
-    unsigned char *d0, unsigned char *d1, unsigned char *d2, unsigned char *d3,
-    unsigned char *d4, unsigned char *d5, unsigned char *d6, unsigned char *d7,
-    unsigned char *d8, unsigned char *d9, unsigned char *d10, unsigned char *d11,
-    unsigned char *d12, unsigned char *d13, unsigned char *d14, unsigned char *d15);
+// Batch 1x (wywołuje 16x, resztę zeruje)
+void ripemd160_avx512_1block(const uint8_t* in, uint8_t* out);
 
-} // namespace ripemd160avx512
+#ifdef __cplusplus
+}
+#endif
 
 #endif // RIPEMD160_AVX512_H
