@@ -73,6 +73,32 @@ void moveCursorTo(int x, int y) {
 }
 
 // ================================================
+// Narzędzia do wyświetlania dużych liczb i czasu
+// ================================================
+
+std::string to_string_128(__uint128_t val) {
+  if (val == 0) return "0";
+  std::string ret;
+  while (val) {
+    ret.push_back('0' + (val % 10));
+    val /= 10;
+  }
+  std::reverse(ret.begin(), ret.end());
+  return ret;
+}
+
+std::string formatElapsedTime(double seconds) {
+  int h = int(seconds) / 3600;
+  int m = (int(seconds) % 3600) / 60;
+  double s = std::fmod(seconds, 60.0);
+  std::ostringstream oss;
+  if (h > 0) oss << h << "h ";
+  if (h > 0 || m > 0) oss << m << "m ";
+  oss << std::fixed << std::setprecision(2) << s << "s";
+  return oss.str();
+}
+
+// ================================================
 // Stałe i zmienne globalne
 // ================================================
 
@@ -83,7 +109,60 @@ const __uint128_t REPORT_INTERVAL = 10000000;
 static constexpr int POINTS_BATCH_SIZE = 512;
 static constexpr int HASH_BATCH_SIZE = 32;
 
-const unordered_map<int, tuple<int, string, string>> PUZZLE_DATA = {};
+const unordered_map<int, tuple<int, string, string>> PUZZLE_DATA = {
+	{20, {8, "b907c3a2a3b27789dfb509b730dd47703c272868",  "357535"}}, 
+    {21, {9, "29a78213caa9eea824acf08022ab9dfc83414f56",  "863317"}},
+    {22, {11, "7ff45303774ef7a52fffd8011981034b258cb86b", "1811764"}}, 
+    {23, {12, "d0a79df189fe1ad5c306cc70497b358415da579e", "3007503"}},
+    {24, {9, "0959e80121f36aea13b3bad361c15dac26189e2f",  "5598802"}},
+    {25, {12, "2f396b29b27324300d0c59b17c3abc1835bd3dbb", "14428676"}},
+    {26, {14, "bfebb73562d4541b32a02ba664d140b5a574792f", "33185509"}},
+    {27, {13, "0c7aaf6caa7e5424b63d317f0f8f1f9fa40d5560", "54538862"}},
+    {28, {16, "1306b9e4ff56513a476841bac7ba48d69516b1da", "111949941"}},
+    {29, {18, "5a416cc9148f4a377b672c8ae5d3287adaafadec", "227634408"}},
+    {30, {16, "d39c4704664e1deb76c9331e637564c257d68a08", "400708894"}},
+    {31, {13, "d805f6f251f7479ebd853b3d0f4b9b2656d92f1d", "1033162084"}},
+    {32, {14, "9e42601eeaedc244e15f17375adb0e2cd08efdc9", "2102388551"}},
+    {33, {15, "4e15e5189752d1eaf444dfd6bff399feb0443977", "3093472814"}},
+    {34, {16, "f6d67d7983bf70450f295c9cb828daab265f1bfa", "7137437912"}},
+    {35, {19, "f6d8ce225ffbdecec170f8298c3fc28ae686df25", "14133072157"}},
+    {36, {14, "74b1e012be1521e5d8d75e745a26ced845ea3d37", "20112871792"}},
+    {37, {23, "28c30fb9118ed1da72e7c4f89c0164756e8a021d",   "42387769980"}},
+    {38, {21, "b190e2d40cfdeee2cee072954a2be89e7ba39364", "100251560595"}},
+    {39, {23, "0b304f2a79a027270276533fe1ed4eff30910876", "146971536592"}},
+    {40, {20, "95a156cd21b4a69de969eb6716864f4c8b82a82a", "323724968937"}},
+    {41, {25, "d1562eb37357f9e6fc41cb2359f4d3eda4032329", "1003651412950"}},
+    {42, {24, "8efb85f9c5b5db2d55973a04128dc7510075ae23", "1458252205147"}},
+    {43, {19, "f92044c7924e5525c61207972c253c9fc9f086f7", "2895374552463"}},
+    {44, {24, "80df54e1f612f2fc5bdc05c9d21a83aa8d20791e", "7409811047825"}},
+    {45, {21, "f0225bfc68a6e17e87cd8b5e60ae3be18f120753", "15404761757071"}},
+    {46, {24, "9a012260d01c5113df66c8a8438c9f7a1e3d5dac", "19996463086597"}},
+    {47, {27, "f828005d41b0f4fed4c8dca3b06011072cfb07d4", "51408670348612"}},
+    {48, {21, "8661cb56d9df0a61f01328b55af7e56a3fe7a2b2", "119666659114170"}},
+    {49, {30, "0d2f533966c6578e1111978ca698f8add7fffdf3", "191206974700443"}},
+    {50, {29, "de081b76f840e462fa2cdf360173dfaf4a976a47", "409118905032525"}},
+    {51, {25, "ef6419cffd7fad7027994354eb8efae223c2dbe7", "611140496167764"}},
+    {52, {27, "36af659edbe94453f6344e920d143f1778653ae7", "2058769515153876"}},
+    {53, {26, "2f4870ef54fa4b048c1365d42594cc7d3d269551", "4216495639600700"}},
+    {54, {30, "cb66763cf7fde659869ae7f06884d9a0f879a092", "6763683971478124"}},
+    {55, {31, "db53d9bbd1f3a83b094eeca7dd970bd85b492fa2", "9974455244496707"}},
+    {56, {31, "48214c5969ae9f43f75070cea1e2cb41d5bdcccd", "30045390491869460"}},
+    {57, {33, "328660ef43f66abe2653fa178452a5dfc594c2a1", "44218742292676575"}},
+    {58, {28, "8c2a6071f89c90c4dab5ab295d7729d1b54ea60f", "138245758910846492"}},
+    {59, {30, "b14ed3146f5b2c9bde1703deae9ef33af8110210", "199976667976342049"}},
+    {60, {31, "cdf8e5c7503a9d22642e3ecfc87817672787b9c5", "525070384258266191"}},
+    {61, {25, "68133e19b2dfb9034edf9830a200cfdf38c90cbd", "1135041350219496382"}},
+    {62, {35, "e26646db84b0602f32b34b5a62ca3cae1f91b779", "1425787542618654982"}},
+    {63, {34, "ef58afb697b094423ce90721fbb19a359ef7c50e", "3908372542507822062"}},
+    {64, {34, "3ee4133d991f52fdf6a25c9834e0745ac74248a4", "8993229949524469768"}},
+    {65, {37, "52e763a7ddc1aa4fa811578c491c1bc7fd570137", "17799667357578236628"}},
+    {66, {35, "20d45a6a762535700ce9e0b216e31994335db8a5", "30568377312064202855"}},
+    {67, {31, "739437bb3dd6d1983e66629c5f08c70e52769371", "46346217550346335726"}},
+    {68, {42, "e0b8a2baee1b77fc703455f39d51477451fc8cfc", "132656943602386256302"}},
+    {69, {34, "61eb8a50c86b0584bb727dd65bed8d2400d6d5aa", "219898266213316039825"}},
+    {70, {29, "5db8cda53a6a002db10365967d7f85d19e171b10", "297274491920375905804"}},
+    {71, {29, "f6f5431d25bbf7b12e8add9af5e3475c44a0a5b8", "970436974005023690481"}}
+};
 
 vector<unsigned char> TARGET_HASH160_RAW(20);
 string TARGET_HASH160;
@@ -130,6 +209,11 @@ union AVXCounter {
   }
 
   static uint64_t mod(const AVXCounter& num, uint64_t denom) { return num.load() % denom; }
+
+  // Dodane: mnożenie AVXCounter * uint64_t
+  static AVXCounter mul(uint64_t a, uint64_t b) {
+    return AVXCounter(static_cast<__uint128_t>(a) * static_cast<__uint128_t>(b));
+  }
 };
 
 static AVXCounter total_checked_avx;
@@ -212,6 +296,9 @@ class CombinationGenerator {
 // Funkcje haszujące
 // ================================================
 
+// Deklaracja funkcji - ważne!
+extern "C" void ripemd160_avx512_32blocks(const uint8_t* data[32], uint8_t* out_hashes[32]);
+
 static void prepareShaBlock(const uint8_t* dataSrc, __uint128_t dataLen, uint8_t* outBlock) {
   fill_n(outBlock, 64, 0);
   memcpy(outBlock, dataSrc, dataLen);
@@ -242,6 +329,7 @@ static void computeHash160BatchAVX512(int numKeys, uint8_t pubKeys[][33],
   for (int batch = 0; batch < (numKeys + HASH_BATCH_SIZE - 1) / HASH_BATCH_SIZE; batch++) {
     const int batchCount = min(HASH_BATCH_SIZE, numKeys - batch * HASH_BATCH_SIZE);
 
+    // Przygotowanie wejścia SHA256
     for (int i = 0; i < batchCount; i++) {
       prepareShaBlock(pubKeys[batch * HASH_BATCH_SIZE + i], 33, shaInputs[i].data());
       inPtr[i] = shaInputs[i].data();
@@ -250,28 +338,14 @@ static void computeHash160BatchAVX512(int numKeys, uint8_t pubKeys[][33],
 
     sha256_avx512_32blocks(inPtr, outPtr);
 
+    // Przygotowanie wejścia RIPEMD160 (po SHA256)
     for (int i = 0; i < batchCount; i++) {
       prepareRipemdBlock(shaOutputs[i].data(), ripemdInputs[i].data());
       inPtr[i] = ripemdInputs[i].data();
       outPtr[i] = hashResults[batch * HASH_BATCH_SIZE + i];
     }
 
-        ripemd160avx512::ripemd160avx512_64(
-            const_cast<unsigned char*>(inPtr[0]), const_cast<unsigned char*>(inPtr[1]),
-            ripemd160avx512::ripemd160avx512_64(
-    const_cast<unsigned char*>(inPtr[0]), const_cast<unsigned char*>(inPtr[1]),
-    const_cast<unsigned char*>(inPtr[2]), const_cast<unsigned char*>(inPtr[3]),
-    const_cast<unsigned char*>(inPtr[4]), const_cast<unsigned char*>(inPtr[5]),
-    const_cast<unsigned char*>(inPtr[6]), const_cast<unsigned char*>(inPtr[7]),
-    const_cast<unsigned char*>(inPtr[8]), const_cast<unsigned char*>(inPtr[9]),
-    const_cast<unsigned char*>(inPtr[10]), const_cast<unsigned char*>(inPtr[11]),
-    const_cast<unsigned char*>(inPtr[12]), const_cast<unsigned char*>(inPtr[13]),
-    const_cast<unsigned char*>(inPtr[14]), const_cast<unsigned char*>(inPtr[15]),
-    outPtr[0], outPtr[1], outPtr[2], outPtr[3],
-    outPtr[4], outPtr[5], outPtr[6], outPtr[7],
-    outPtr[8], outPtr[9], outPtr[10], outPtr[11],
-    outPtr[12], outPtr[13], outPtr[14], outPtr[15]
-        );
+    ripemd160_avx512_32blocks(inPtr, outPtr);
   }
 }
 
@@ -391,9 +465,9 @@ void worker(Secp256K1* secp, int bit_length, int flip_count, int threadId, AVXCo
         Int foundKey;
         foundKey.Set(&currentKey);
         if (i < POINTS_BATCH_SIZE) {
-          foundKey.Add(&Int(i));
+          foundKey.Add(&Int((uint64_t)i));
         } else {
-          foundKey.Sub(&Int(i - POINTS_BATCH_SIZE));
+          foundKey.Sub(&Int((uint64_t)(i - POINTS_BATCH_SIZE)));
         }
 
         lock_guard<mutex> lock(result_mutex);
@@ -510,3 +584,6 @@ int main(int argc, char* argv[]) {
 
     return 0;
   }
+  // Upewnij się, że zamykasz main
+  return 1;
+}
