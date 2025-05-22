@@ -3,10 +3,9 @@
 
 #include <immintrin.h>
 #include <inttypes.h>
-
 #include <string>
+#include <cstring>
 
-// We need 1 extra block for Knuth div algorithm, Montgomery multiplication and ModInv
 #define BISIZE 256
 
 #if BISIZE == 256
@@ -26,7 +25,6 @@ class Int {
   Int(uint64_t u64);
   Int(Int *a);
 
-  // Arithmetic operations
   void Add(uint64_t a);
   void Add(Int *a);
   void Add(Int *a, Int *b);
@@ -46,7 +44,6 @@ class Int {
   void Neg();
   void Abs();
 
-  // Bitwise operations
   void ShiftR(uint32_t n);
   void ShiftR32Bit();
   void ShiftR64Bit();
@@ -56,7 +53,6 @@ class Int {
   void SwapBit(int bitNumber);
   void Xor(const Int *a);
 
-  // Comparison
   bool IsGreater(Int *a);
   bool IsGreaterOrEqual(Int *a);
   bool IsLowerOrEqual(Int *a);
@@ -71,10 +67,8 @@ class Int {
   bool IsOdd();
   bool IsProbablePrime();
 
-  // Conversions
   double ToDouble();
 
-  // Modular arithmetic
   static void SetupField(Int *n, Int *R = NULL, Int *R2 = NULL, Int *R3 = NULL, Int *R4 = NULL);
   static Int *GetR();
   static Int *GetR2();
@@ -103,9 +97,9 @@ class Int {
   bool HasSqrt();
   void imm_umul_asm(const uint64_t *a, uint64_t b, uint64_t *res);
 
-  // AVX-512 Optimized Methods
-  void MontgomeryMultAVX512(Int *a, Int *b, Int *n);  // AVX-512 accelerated Montgomery
-  void AddAVX512(Int *a);                             // Vectorized 512-bit addition
+  // AVX-512 Optimized
+  void MontgomeryMultAVX512(Int *a, Int *b, Int *n);
+  void AddAVX512(Int *a);
 
   // Secp256k1 specific
   static void InitK1(Int *order);
@@ -119,12 +113,10 @@ class Int {
   void ModNegK1order();
   uint32_t ModPositiveK1();
 
-  // Size utilities
   int GetSize();
   int GetSize64();
   int GetBitLength();
 
-  // Setters
   void SetInt32(uint32_t value);
   void Set(Int *a);
   void SetBase10(char *value);
@@ -138,13 +130,11 @@ class Int {
   void Set32Bytes(unsigned char *bytes);
   void MaskByte(int n);
 
-  // Getters
   uint32_t GetInt32();
   int GetBit(uint32_t n);
   unsigned char GetByte(int n);
   void Get32Bytes(unsigned char *buff);
 
-  // String conversions
   std::string GetBase2();
   std::string GetBase10();
   std::string GetBase16();
@@ -152,21 +142,17 @@ class Int {
   std::string GetBlockStr();
   std::string GetC64Str(int nbDigit);
 
-  // Debug
   static void Check();
   static bool CheckInv(Int *a);
   static Int P;
 
-  // Data storage with 64-byte alignment for AVX-512
   union {
     __attribute__((aligned(64))) uint32_t bits[NB32BLOCK];
     __attribute__((aligned(64))) uint64_t bits64[NB64BLOCK];
   };
 
  private:
-  // Helper methods
-  void MatrixVecMul(Int *u, Int *v, int64_t _11, int64_t _12, int64_t _21, int64_t _22,
-                    uint64_t *cu, uint64_t *cv);
+  void MatrixVecMul(Int *u, Int *v, int64_t _11, int64_t _12, int64_t _21, int64_t _22, uint64_t *cu, uint64_t *cv);
   void MatrixVecMul(Int *u, Int *v, int64_t _11, int64_t _12, int64_t _21, int64_t _22);
   uint64_t AddCh(Int *a, uint64_t ca, Int *b, uint64_t cb);
   uint64_t AddCh(Int *a, uint64_t ca);
@@ -177,239 +163,7 @@ class Int {
   int GetLowestBit();
   void CLEAR();
   void CLEARFF();
-  void DivStep62(Int *u, Int *v, int64_t *eta, int *pos, int64_t *uu, int64_t *uv, int64_t *vu,
-                 int64_t *vv);
+  void DivStep62(Int *u, Int *v, int64_t *eta, int *pos, int64_t *uu, int64_t *uv, int64_t *vu, int64_t *vv);
 };
-
-// AVX-512 Optimized Montgomery Multiplication
-void Int::MontgomeryMultAVX512(Int *a, Int *b, Int *n) {
-  __m512i carry = _mm512_setzero_si512();
-  alignas(64) uint64_t temp[NB64BLOCK + 1] = {0};
-
-  // Vectorized multiply-accumulate
-  for (int i = 0; i < NB64BLOCK; i++) {
-    __m512i ai = _mm512_set1_epi64(a->bits64[i]);
-    __m512i bi = _mm512_load_epi64(&b->bits64[0]);
-    __m512i acc = _mm512_load_epi64(&temp[0]);
-
-    // FMA operation
-    acc = _mm512_add_epi64(acc, _mm512_mullo_epi64(ai, bi));
-    carry = _mm512_srli_epi64(_mm512_add_epi64(_mm512_mulhi_epu64(ai, bi), carry), 64);
-
-    _mm512_store_epi64(&temp[0], acc);
-  }
-
-  // Reduce with modulus n using AVX-512
-  __m512i nvec = _mm512_load_epi64(n->bits64);
-  for (int i = 0; i < NB64BLOCK; i++) {
-    __m512i q = _mm512_mullo_epi64(temp[i], _mm512_set1_epi64(n->bits64[0]));
-    __m512i prod = _mm512_mullo_epi64(q, nvec);
-    temp[i] = _mm512_reduce_add_epi64(_mm512_sub_epi64(_mm512_set1_epi64(temp[i]), prod));
-  }
-
-  memcpy(this->bits64, temp, NB64BLOCK * 8);
-}
-
-// AVX-512 Vectorized Addition
-void Int::AddAVX512(Int *a) {
-  __m512i carry = _mm512_setzero_si512();
-  for (int i = 0; i < NB64BLOCK; i += 8) {
-    __m512i val = _mm512_load_epi64(&bits64[i]);
-    __m512i add = _mm512_load_epi64(&a->bits64[i]);
-    __m512i res = _mm512_add_epi64(val, add);
-    res = _mm512_add_epi64(res, carry);
-    carry = _mm512_srli_epi64(_mm512_cmpgt_epi64_mask(res, val), 63);
-    _mm512_store_epi64(&bits64[i], res);
-  }
-}
-
-#ifndef WIN64
-
-// Missing intrinsics
-inline uint64_t _umul128(uint64_t a, uint64_t b, uint64_t *h) {
-#if defined(__BMI2__)
-  uint64_t rlo, rhi;
-  __asm__("mulx %[B], %[LO], %[HI]" : [LO] "=r"(rlo), [HI] "=r"(rhi) : "d"(a), [B] "r"(b) : "cc");
-  *h = rhi;
-  return rlo;
-#else
-  uint64_t rhi, rlo;
-  __asm__("mulq %[B]" : "=d"(rhi), "=a"(rlo) : "a"(a), [B] "r"(b) : "cc");
-  *h = rhi;
-  return rlo;
-#endif
-}
-
-int64_t inline _mul128(int64_t a, int64_t b, int64_t *h) {
-  uint64_t rhi;
-  uint64_t rlo;
-  __asm__("imulq  %[b];" : "=d"(rhi), "=a"(rlo) : "1"(a), [b] "rm"(b));
-  *h = rhi;
-  return rlo;
-}
-
-static inline uint64_t _udiv128(uint64_t hi, uint64_t lo, uint64_t d, uint64_t *r) {
-  uint64_t q;
-  uint64_t rem;
-  asm("divq %4" : "=d"(rem), "=a"(q) : "a"(lo), "d"(hi), "r"(d) : "cc");
-  *r = rem;
-  return q;
-}
-
-static uint64_t inline my_rdtsc() {
-  uint32_t h;
-  uint32_t l;
-  __asm__("rdtsc;" : "=d"(h), "=a"(l));
-  return (uint64_t)h << 32 | (uint64_t)l;
-}
-
-#define __shiftright128(a, b, n) ((a) >> (n)) | ((b) << (64 - (n)))
-#define __shiftleft128(a, b, n) ((b) << (n)) | ((a) >> (64 - (n)))
-
-#define _subborrow_u64(a, b, c, d) __builtin_ia32_sbb_u64(a, b, c, (long long unsigned int *)d);
-#define _addcarry_u64(a, b, c, d) \
-  __builtin_ia32_addcarryx_u64(a, b, c, (long long unsigned int *)d);
-#define _byteswap_uint64 __builtin_bswap64
-#define LZC(x) __builtin_clzll(x)
-#define TZC(x) __builtin_ctzll(x)
-
-#else
-
-#include <intrin.h>
-#define TZC(x) _tzcnt_u64(x)
-#define LZC(x) _lzcnt_u64(x)
-
-#endif
-
-#define LoadI64(i, i64)      \
-  i.bits64[0] = i64;         \
-  i.bits64[1] = i64 >> 63;   \
-  i.bits64[2] = i.bits64[1]; \
-  i.bits64[3] = i.bits64[1]; \
-  i.bits64[4] = i.bits64[1];
-
-static void inline imm_mul(uint64_t *x, uint64_t y, uint64_t *dst, uint64_t *carryH) {
-  unsigned char c = 0;
-  uint64_t h, carry;
-  dst[0] = _umul128(x[0], y, &h);
-  carry = h;
-  c = _addcarry_u64(c, _umul128(x[1], y, &h), carry, dst + 1);
-  carry = h;
-  c = _addcarry_u64(c, _umul128(x[2], y, &h), carry, dst + 2);
-  carry = h;
-  c = _addcarry_u64(c, _umul128(x[3], y, &h), carry, dst + 3);
-  carry = h;
-  c = _addcarry_u64(c, _umul128(x[4], y, &h), carry, dst + 4);
-  carry = h;
-#if NB64BLOCK > 5
-  c = _addcarry_u64(c, _umul128(x[5], y, &h), carry, dst + 5);
-  carry = h;
-  c = _addcarry_u64(c, _umul128(x[6], y, &h), carry, dst + 6);
-  carry = h;
-  c = _addcarry_u64(c, _umul128(x[7], y, &h), carry, dst + 7);
-  carry = h;
-  c = _addcarry_u64(c, _umul128(x[8], y, &h), carry, dst + 8);
-  carry = h;
-#endif
-  *carryH = carry;
-}
-
-static void inline imm_imul(uint64_t *x, uint64_t y, uint64_t *dst, uint64_t *carryH) {
-  unsigned char c = 0;
-  uint64_t h, carry;
-  dst[0] = _umul128(x[0], y, &h);
-  carry = h;
-  c = _addcarry_u64(c, _umul128(x[1], y, &h), carry, dst + 1);
-  carry = h;
-  c = _addcarry_u64(c, _umul128(x[2], y, &h), carry, dst + 2);
-  carry = h;
-  c = _addcarry_u64(c, _umul128(x[3], y, &h), carry, dst + 3);
-  carry = h;
-#if NB64BLOCK > 5
-  c = _addcarry_u64(c, _umul128(x[4], y, &h), carry, dst + 4);
-  carry = h;
-  c = _addcarry_u64(c, _umul128(x[5], y, &h), carry, dst + 5);
-  carry = h;
-  c = _addcarry_u64(c, _umul128(x[6], y, &h), carry, dst + 6);
-  carry = h;
-  c = _addcarry_u64(c, _umul128(x[7], y, &h), carry, dst + 7);
-  carry = h;
-#endif
-  c = _addcarry_u64(c, _mul128(x[NB64BLOCK - 1], y, (int64_t *)&h), carry, dst + NB64BLOCK - 1);
-  carry = h;
-  *carryH = carry;
-}
-
-static void inline imm_umul(uint64_t *x, uint64_t y, uint64_t *dst) {
-  unsigned char c = 0;
-  uint64_t h, carry;
-  dst[0] = _umul128(x[0], y, &h);
-  carry = h;
-  c = _addcarry_u64(c, _umul128(x[1], y, &h), carry, dst + 1);
-  carry = h;
-  c = _addcarry_u64(c, _umul128(x[2], y, &h), carry, dst + 2);
-  carry = h;
-  c = _addcarry_u64(c, _umul128(x[3], y, &h), carry, dst + 3);
-  carry = h;
-#if NB64BLOCK > 5
-  c = _addcarry_u64(c, _umul128(x[4], y, &h), carry, dst + 4);
-  carry = h;
-  c = _addcarry_u64(c, _umul128(x[5], y, &h), carry, dst + 5);
-  carry = h;
-  c = _addcarry_u64(c, _umul128(x[6], y, &h), carry, dst + 6);
-  carry = h;
-  c = _addcarry_u64(c, _umul128(x[7], y, &h), carry, dst + 7);
-  carry = h;
-#endif
-  _addcarry_u64(c, 0ULL, carry, dst + (NB64BLOCK - 1));
-}
-
-static void inline shiftR(unsigned char n, uint64_t *d) {
-  d[0] = __shiftright128(d[0], d[1], n);
-  d[1] = __shiftright128(d[1], d[2], n);
-  d[2] = __shiftright128(d[2], d[3], n);
-  d[3] = __shiftright128(d[3], d[4], n);
-#if NB64BLOCK > 5
-  d[4] = __shiftright128(d[4], d[5], n);
-  d[5] = __shiftright128(d[5], d[6], n);
-  d[6] = __shiftright128(d[6], d[7], n);
-  d[7] = __shiftright128(d[7], d[8], n);
-#endif
-  d[NB64BLOCK - 1] = ((int64_t)d[NB64BLOCK - 1]) >> n;
-}
-
-static void inline shiftR(unsigned char n, uint64_t *d, uint64_t h) {
-  d[0] = __shiftright128(d[0], d[1], n);
-  d[1] = __shiftright128(d[1], d[2], n);
-  d[2] = __shiftright128(d[2], d[3], n);
-  d[3] = __shiftright128(d[3], d[4], n);
-#if NB64BLOCK > 5
-  d[4] = __shiftright128(d[4], d[5], n);
-  d[5] = __shiftright128(d[5], d[6], n);
-  d[6] = __shiftright128(d[6], d[7], n);
-  d[7] = __shiftright128(d[7], d[8], n);
-#endif
-  d[NB64BLOCK - 1] = __shiftright128(d[NB64BLOCK - 1], h, n);
-}
-
-static void inline shiftL(unsigned char n, uint64_t *d) {
-#if NB64BLOCK > 5
-  d[8] = __shiftleft128(d[7], d[8], n);
-  d[7] = __shiftleft128(d[6], d[7], n);
-  d[6] = __shiftleft128(d[5], d[6], n);
-  d[5] = __shiftleft128(d[4], d[5], n);
-#endif
-  d[4] = __shiftleft128(d[3], d[4], n);
-  d[3] = __shiftleft128(d[2], d[3], n);
-  d[2] = __shiftleft128(d[1], d[2], n);
-  d[1] = __shiftleft128(d[0], d[1], n);
-  d[0] = d[0] << n;
-}
-
-static inline int isStrictGreater128(uint64_t h1, uint64_t l1, uint64_t h2, uint64_t l2) {
-  if (h1 > h2) return 1;
-  if (h1 == h2) return l1 > l2;
-  return 0;
-}
 
 #endif  // BIGINTH
