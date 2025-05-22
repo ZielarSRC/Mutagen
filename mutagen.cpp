@@ -127,7 +127,7 @@ const unordered_map<int, tuple<int, string, string>> PUZZLE_DATA = {
     {34, {16, "f6d67d7983bf70450f295c9cb828daab265f1bfa", "7137437912"}},
     {35, {19, "f6d8ce225ffbdecec170f8298c3fc28ae686df25", "14133072157"}},
     {36, {14, "74b1e012be1521e5d8d75e745a26ced845ea3d37", "20112871792"}},
-    {37, {23, "28c30fb9118ed1da72e7c4f89c0164756e8a021d",   "42387769980"}},
+    {37, {23, "28c30fb9118ed1da72e7c4f89c0164756e8a021d",  "42387769980"}},
     {38, {21, "b190e2d40cfdeee2cee072954a2be89e7ba39364", "100251560595"}},
     {39, {23, "0b304f2a79a027270276533fe1ed4eff30910876", "146971536592"}},
     {40, {20, "95a156cd21b4a69de969eb6716864f4c8b82a82a", "323724968937"}},
@@ -464,10 +464,13 @@ void worker(Secp256K1* secp, int bit_length, int flip_count, int threadId, AVXCo
       if (mask != 0) {
         Int foundKey;
         foundKey.Set(&currentKey);
+        Int tmp;
         if (i < POINTS_BATCH_SIZE) {
-          foundKey.Add(&Int((uint64_t)i));
+          tmp = Int((uint64_t)i);
+          foundKey.Add(&tmp);
         } else {
-          foundKey.Sub(&Int((uint64_t)(i - POINTS_BATCH_SIZE)));
+          tmp = Int((uint64_t)(i - POINTS_BATCH_SIZE));
+          foundKey.Sub(&tmp);
         }
 
         lock_guard<mutex> lock(result_mutex);
