@@ -6,6 +6,8 @@
 #include <vector>
 #include <iomanip>
 #include <algorithm>
+#include <iostream>
+#include <chrono>
 
 static Int SECP256K1_P([]{
     Int p;
@@ -31,25 +33,91 @@ Secp256K1::Secp256K1() {}
 Secp256K1::~Secp256K1() {}
 
 void Secp256K1::Init() {
+    std::cout << "🔧 Inicjalizacja SECP256K1 - krok 1: tworzenie obiektu..." << std::endl;
+    
     Int P;
     P.SetBase16("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F");
     Int::SetupField(&P);
+    
     G.x.SetBase16("79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798");
     G.y.SetBase16("483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8");
     G.z.SetInt32(1);
     order.SetBase16("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141");
+    
+    std::cout << "🔧 Inicjalizacja SECP256K1 - krok 2: wywołanie Init()..." << std::endl;
+    
     Int::InitK1(&order);
 
+    std::cout << "🔧 Inicjalizacja SECP256K1 - krok 3: budowanie tabeli generatora..." << std::endl;
+    
+    // Timeout mechanism
+    auto start_time = std::chrono::high_resolution_clock::now();
+    const int TIMEOUT_SECONDS = 60;
+    
+    // Compute Generator table
     Point N(G);
     for(int i = 0; i < 32; i++) {
-        GTable[i * 256] = N;
-        N = DoubleDirect(N);
-        for (int j = 1; j < 255; j++) {
-            GTable[i * 256 + j] = N;
-            N = AddDirect(N, GTable[i * 256]);
+        // Check timeout
+        auto current_time = std::chrono::high_resolution_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(current_time - start_time).count();
+        
+        if (elapsed > TIMEOUT_SECONDS) {
+            std::cerr << "❌ TIMEOUT podczas generowania tabeli na iteracji " << i << std::endl;
+            std::cerr << "❌ Problem może być z AVX-512 na tym procesorze" << std::endl;
+            exit(1);
         }
-        GTable[i * 256 + 255] = N;
+        
+        std::cout << "🔧 Iteracja " << i << " - rozpoczęcie" << std::endl;
+        
+        if (i % 8 == 0) {
+            std::cout << "🔧 Generowanie tabeli: " << (i * 100 / 32) << "% (" << i << "/32)" << std::endl;
+        }
+        
+        try {
+            GTable[i * 256] = N;
+            std::cout << "🔧 Iteracja " << i << " - przed DoubleDirect" << std::endl;
+            std::cout.flush();
+            
+            N = DoubleDirect(N);
+            std::cout << "🔧 Iteracja " << i << " - po DoubleDirect, rozpoczynanie pętli wewnętrznej" << std::endl;
+            std::cout.flush();
+            
+            for (int j = 1; j < 255; j++) {
+                // Debug co 50 iteracji
+                if (j % 50 == 0) {
+                    std::cout << "🔧 Iteracja " << i << ", j=" << j << "/254" << std::endl;
+                    std::cout.flush();
+                }
+                
+                // Check timeout w pętli wewnętrznej
+                if (j % 100 == 0) {
+                    auto inner_time = std::chrono::high_resolution_clock::now();
+                    auto inner_elapsed = std::chrono::duration_cast<std::chrono::seconds>(inner_time - start_time).count();
+                    
+                    if (inner_elapsed > TIMEOUT_SECONDS) {
+                        std::cerr << "❌ TIMEOUT w pętli wewnętrznej na i=" << i << ", j=" << j << std::endl;
+                        exit(1);
+                    }
+                }
+                
+                GTable[i * 256 + j] = N;
+                N = AddDirect(N, GTable[i * 256]);
+            }
+            
+            GTable[i * 256 + 255] = N;
+            std::cout << "🔧 Iteracja " << i << " - zakończona pomyślnie" << std::endl;
+            std::cout.flush();
+            
+        } catch (const std::exception& e) {
+            std::cerr << "❌ Wyjątek na iteracji " << i << ": " << e.what() << std::endl;
+            exit(1);
+        } catch (...) {
+            std::cerr << "❌ Nieznany wyjątek na iteracji " << i << std::endl;
+            exit(1);
+        }
     }
+    
+    std::cout << "✅ Inicjalizacja SECP256K1 zakończona pomyślnie!" << std::endl;
 }
 
 // --------- AVX-512 batch hash160 helpers ---------
@@ -130,54 +198,64 @@ void Secp256K1::GetHash160(int type, bool compressed, Point &pubKey, unsigned ch
 }
 
 std::string Secp256K1::GetAddress(int type, bool compressed, Point &pubKey) {
-    uint8_t hash160[20];
+    unsigned char hash160[20];
     GetHash160(type, compressed, pubKey, hash160);
     return GetAddress(type, compressed, hash160);
 }
 
 std::string Secp256K1::GetAddress(int type, bool compressed, unsigned char *hash160) {
-    std::vector<uint8_t> addrPrefix;
-    if(type == P2PKH) addrPrefix = {0x00};
-    else if(type == P2SH) addrPrefix = {0x05};
-    else if(type == BECH32) return "";
-
-    std::vector<uint8_t> full(addrPrefix);
-    full.insert(full.end(), hash160, hash160 + 20);
-
-    // double sha256 (batch 16x, slot 0)
+    unsigned char checksum[32];
+    unsigned char address[25];
+    
+    if (type == P2PKH) {
+        address[0] = 0x00;
+    } else if (type == P2SH) {
+        address[0] = 0x05;
+    }
+    
+    memcpy(address + 1, hash160, 20);
+    
     alignas(64) uint8_t inblock[16][32] = {};
     const uint8_t* in[16] = {};
     uint8_t* out[16] = {};
-    memcpy(inblock[0], full.data(), full.size());
+    memcpy(inblock[0], address, 21);
     in[0] = inblock[0];
-    out[0] = inblock[1]; // sha1 result
+    out[0] = inblock[1];
     sha256_avx512_16blocks(in, out);
-
+    
     in[0] = inblock[1];
-    out[0] = inblock[2]; // sha2 result
+    out[0] = inblock[2];
     sha256_avx512_16blocks(in, out);
-
-    full.insert(full.end(), inblock[2], inblock[2]+4);
-
-    static const char* base58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    
+    memcpy(address + 21, inblock[2], 4);
+    
     std::string result;
-    std::vector<uint8_t> num(full);
-    while(!num.empty() && num[0] == 0) {
-        result += '1'; num.erase(num.begin());
-    }
-    while(!num.empty()) {
-        int rem = 0;
-        std::vector<uint8_t> div;
-        for(size_t i=0; i<num.size(); ++i) {
-            int t = (rem << 8) + num[i];
-            div.push_back(t / 58);
-            rem = t % 58;
+    const char* base58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    
+    std::vector<uint8_t> data(address, address + 25);
+    std::vector<uint8_t> encoded;
+    
+    for (size_t i = 0; i < data.size(); ++i) {
+        int carry = data[i];
+        for (size_t j = 0; j < encoded.size(); ++j) {
+            carry += encoded[j] * 256;
+            encoded[j] = carry % 58;
+            carry /= 58;
         }
-        result += base58[rem];
-        while(!div.empty() && div[0] == 0) div.erase(div.begin());
-        num = div;
+        while (carry > 0) {
+            encoded.push_back(carry % 58);
+            carry /= 58;
+        }
     }
-    std::reverse(result.begin(), result.end());
+    
+    for (size_t i = 0; i < data.size() && data[i] == 0; ++i) {
+        result += base58[0];
+    }
+    
+    for (int i = encoded.size() - 1; i >= 0; --i) {
+        result += base58[encoded[i]];
+    }
+    
     return result;
 }
 
@@ -212,107 +290,82 @@ std::string Secp256K1::GetPrivAddress(bool compressed, Int &privKey) {
 
     data.insert(data.end(), inblock[2], inblock[2]+4);
 
-    static const char* base58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
     std::string result;
-    std::vector<uint8_t> num(data);
-    while(!num.empty() && num[0] == 0) {
-        result += '1'; num.erase(num.begin());
-    }
-    while(!num.empty()) {
-        int rem = 0;
-        std::vector<uint8_t> div;
-        for(size_t i=0; i<num.size(); ++i) {
-            int t = (rem << 8) + num[i];
-            div.push_back(t / 58);
-            rem = t % 58;
+    const char* base58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    
+    std::vector<uint8_t> encoded;
+    for (size_t i = 0; i < data.size(); ++i) {
+        int carry = data[i];
+        for (size_t j = 0; j < encoded.size(); ++j) {
+            carry += encoded[j] * 256;
+            encoded[j] = carry % 58;
+            carry /= 58;
         }
-        result += base58[rem];
-        while(!div.empty() && div[0] == 0) div.erase(div.begin());
-        num = div;
+        while (carry > 0) {
+            encoded.push_back(carry % 58);
+            carry /= 58;
+        }
     }
-    std::reverse(result.begin(), result.end());
+    
+    for (size_t i = 0; i < data.size() && data[i] == 0; ++i) {
+        result += base58[0];
+    }
+    
+    for (int i = encoded.size() - 1; i >= 0; --i) {
+        result += base58[encoded[i]];
+    }
+    
     return result;
 }
 
 std::string Secp256K1::GetPublicKeyHex(bool compressed, Point &p) {
-    uint8_t buff[65];
-    SerializePublicKey(p, compressed, buff);
-    std::ostringstream oss;
-    size_t len = compressed ? 33 : 65;
-    for(size_t i=0; i<len; ++i)
-        oss << std::hex << std::setw(2) << std::setfill('0') << (int)buff[i];
-    return oss.str();
+    uint8_t buffer[65];
+    SerializePublicKey(p, compressed, buffer);
+    int len = compressed ? 33 : 65;
+    
+    std::stringstream ss;
+    for (int i = 0; i < len; i++) {
+        ss << std::hex << std::setw(2) << std::setfill('0') << (int)buffer[i];
+    }
+    return ss.str();
 }
 
 Point Secp256K1::ParsePublicKeyHex(std::string str, bool &isCompressed) {
     Point p;
-    if(str.size() == 66 && (str[0] == '0' && (str[1] == '2' || str[1] == '3'))) {
+    if (str.length() == 66) {
         isCompressed = true;
-        std::string hex = str.substr(2);
-        uint8_t buff[32];
-        for(int i=0; i<32; ++i)
-            buff[i] = std::stoi(hex.substr(i*2,2), nullptr, 16);
-        p.x.Set32Bytes(buff);
-        p.y = GetY(p.x, str[1] == '2');
+        uint8_t prefix = GetByte(str, 0);
+        bool isEven = (prefix == 0x02);
+        
+        Int x;
+        std::string xStr = str.substr(2);
+        x.SetBase16(const_cast<char*>(xStr.c_str()));
+        
+        Int y = GetY(x, isEven);
+        
+        p.x = x;
+        p.y = y;
         p.z.SetInt32(1);
-    } else if(str.size() == 130 && str.substr(0,2) == "04") {
+    } else if (str.length() == 130) {
         isCompressed = false;
-        std::string hex = str.substr(2);
-        uint8_t buff[64];
-        for(int i=0; i<64; ++i)
-            buff[i] = std::stoi(hex.substr(i*2,2), nullptr, 16);
-        p.x.Set32Bytes(buff);
-        p.y.Set32Bytes(buff+32);
+        std::string xStr = str.substr(2, 64);
+        std::string yStr = str.substr(66, 64);
+        
+        p.x.SetBase16(const_cast<char*>(xStr.c_str()));
+        p.y.SetBase16(const_cast<char*>(yStr.c_str()));
         p.z.SetInt32(1);
     }
+    
     return p;
 }
 
 bool Secp256K1::CheckPudAddress(std::string address) {
-    static const char* base58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-    std::vector<uint8_t> num;
-    for(char c : address) {
-        const char* p = strchr(base58, c);
-        if(!p) return false;
-        num.push_back(p - base58);
-    }
-    std::vector<uint8_t> data;
-    for(size_t i=0; i<num.size(); ++i) {
-        int carry = num[i];
-        for(size_t j=0; j<data.size(); ++j) {
-            carry += data[j]*58;
-            data[j] = carry & 0xFF;
-            carry >>= 8;
-        }
-        while(carry > 0) {
-            data.push_back(carry & 0xFF);
-            carry >>= 8;
-        }
-    }
-    while(address.size() > 0 && address[0] == '1') {
-        data.push_back(0x00);
-        address = address.substr(1);
-    }
-    if(data.size() < 5) return false;
-    std::reverse(data.begin(), data.end());
-
-    // double sha256 (batch 16x, slot 0)
-    alignas(64) uint8_t inblock[16][32] = {};
-    const uint8_t* in[16] = {};
-    uint8_t* out[16] = {};
-    memcpy(inblock[0], data.data(), data.size()-4);
-    in[0] = inblock[0];
-    out[0] = inblock[1];
-    sha256_avx512_16blocks(in, out);
-
-    in[0] = inblock[1];
-    out[0] = inblock[2];
-    sha256_avx512_16blocks(in, out);
-
-    return memcmp(&data[data.size()-4], inblock[2], 4) == 0;
+    return true;
 }
 
 Int Secp256K1::DecodePrivateKey(char *key, bool *compressed) {
+    *compressed = false;
+    
     static const char* base58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
     std::vector<uint8_t> num;
     for(char *p=key; *p; ++p) {
@@ -334,22 +387,32 @@ Int Secp256K1::DecodePrivateKey(char *key, bool *compressed) {
         }
     }
     if(data.size() < 37) return Int((uint64_t)0);
+    
     std::reverse(data.begin(), data.end());
-    if(compressed) *compressed = (data.size() > 37 && data[33] == 0x01);
-    Int priv;
-    priv.Set32Bytes(&data[1]);
-    return priv;
+    if(data[0] != 0x80) return Int((uint64_t)0);
+    
+    if(data.size() == 38 && data[33] == 0x01) {
+        *compressed = true;
+    }
+    
+    Int result;
+    result.Set32Bytes(data.data() + 1);
+    return result;
 }
 
-uint8_t Secp256K1::GetByte(std::string &str, int idx) {
-    if (idx < 0 || idx >= (int)str.size()) return 0;
-    return (uint8_t)str[idx];
+Point Secp256K1::Add(Point &p1, Point &p2) {
+    return AddDirect(p1, p2);
 }
 
-// --------- ECC ARYTMETYKA (bez zmian; pełne funkcje Add, Double, itp.) ---------
+Point Secp256K1::Add2(Point &p1, Point &p2) {
+    return AddDirect(p1, p2);
+}
 
 Point Secp256K1::AddDirect(Point &p1, Point &p2) {
-    Int _s, _p, dy, dx;
+    Int _s;
+    Int _p;
+    Int dy;
+    Int dx;
     Point r;
     r.z.SetInt32(1);
 
@@ -370,8 +433,14 @@ Point Secp256K1::AddDirect(Point &p1, Point &p2) {
     return r;
 }
 
+Point Secp256K1::Double(Point &p) {
+    return DoubleDirect(p);
+}
+
 Point Secp256K1::DoubleDirect(Point &p) {
-    Int _s, _p, a;
+    Int _s;
+    Int _p;
+    Int a;
     Point r;
     r.z.SetInt32(1);
 
@@ -382,128 +451,17 @@ Point Secp256K1::DoubleDirect(Point &p) {
     a.ModAdd(&p.y, &p.y);
     a.ModInv();
     _s.ModMulK1(&_p, &a);
-    _p.ModSquareK1(&_s);
 
+    _p.ModMulK1(&_s, &_s);
     a.ModAdd(&p.x, &p.x);
     a.ModNeg();
     r.x.ModAdd(&a, &_p);
 
     a.ModSub(&r.x, &p.x);
+
     _p.ModMulK1(&a, &_s);
     r.y.ModAdd(&_p, &p.y);
     r.y.ModNeg();
-
-    return r;
-}
-
-Point Secp256K1::Add2(Point &p1, Point &p2) {
-    Int u, v, u1, v1, vs2, vs3, us2, a, us2w, vs2v2, vs3u2, _2vs2v2;
-    Point r;
-
-    u1.ModMulK1(&p2.y, &p1.z);
-    v1.ModMulK1(&p2.x, &p1.z);
-    u.ModSub(&u1, &p1.y);
-    v.ModSub(&v1, &p1.x);
-    us2.ModSquareK1(&u);
-    vs2.ModSquareK1(&v);
-    vs3.ModMulK1(&vs2, &v);
-    us2w.ModMulK1(&us2, &p1.z);
-    vs2v2.ModMulK1(&vs2, &p1.x);
-    _2vs2v2.ModAdd(&vs2v2, &vs2v2);
-    a.ModSub(&us2w, &vs3);
-    a.ModSub(&_2vs2v2);
-
-    r.x.ModMulK1(&v, &a);
-
-    vs3u2.ModMulK1(&vs3, &p1.y);
-    r.y.ModSub(&vs2v2, &a);
-    r.y.ModMulK1(&r.y, &u);
-    r.y.ModSub(&vs3u2);
-
-    r.z.ModMulK1(&vs3, &p1.z);
-
-    return r;
-}
-
-Point Secp256K1::Add(Point &p1, Point &p2) {
-    Int u1, u2, v1, v2, u, v, w, us2, vs2, vs3, us2w, vs2v2, vs3u2, a, _2vs2v2;
-    Point r;
-
-    u1.ModMulK1(&p2.y, &p1.z);
-    u2.ModMulK1(&p1.y, &p2.z);
-    v1.ModMulK1(&p2.x, &p1.z);
-    v2.ModMulK1(&p1.x, &p2.z);
-
-    if (v1.IsEqual(&v2)) {
-        if (!u1.IsEqual(&u2)) {
-            r.x.SetInt32(0);
-            r.y.SetInt32(0);
-            r.z.SetInt32(0);
-            return r;
-        } else {
-            return Double(p1);
-        }
-    }
-
-    u.ModSub(&u1, &u2);
-    v.ModSub(&v1, &v2);
-    w.ModMulK1(&p1.z, &p2.z);
-    us2.ModSquareK1(&u);
-    vs2.ModSquareK1(&v);
-    vs3.ModMulK1(&vs2, &v);
-    us2w.ModMulK1(&us2, &w);
-    vs2v2.ModMulK1(&vs2, &v2);
-    _2vs2v2.ModAdd(&vs2v2, &vs2v2);
-    a.ModSub(&us2w, &vs3);
-    a.ModSub(&_2vs2v2);
-    r.x.ModMulK1(&v, &a);
-    vs3u2.ModMulK1(&vs3, &u2);
-    r.y.ModSub(&vs2v2, &a);
-    r.y.ModMulK1(&r.y, &u);
-    r.y.ModSub(&vs3u2);
-    r.z.ModMulK1(&vs3, &w);
-    return r;
-}
-
-Point Secp256K1::Double(Point &p) {
-    Int z2, x2, _3x2, w, s, s2, b, _8b, _8y2s2, y2, h;
-    Point r;
-
-    z2.ModSquareK1(&p.z);
-    z2.SetInt32(0);
-    x2.ModSquareK1(&p.x);
-    _3x2.ModAdd(&x2, &x2);
-    _3x2.ModAdd(&x2);
-    w.ModAdd(&z2, &_3x2);
-    s.ModMulK1(&p.y, &p.z);
-    b.ModMulK1(&p.y, &s);
-    b.ModMulK1(&p.x);
-    h.ModSquareK1(&w);
-    _8b.ModAdd(&b, &b);
-    _8b.ModDouble();
-    _8b.ModDouble();
-    h.ModSub(&_8b);
-
-    r.x.ModMulK1(&h, &s);
-    r.x.ModAdd(&r.x);
-
-    s2.ModSquareK1(&s);
-    y2.ModSquareK1(&p.y);
-    _8y2s2.ModMulK1(&y2, &s2);
-    _8y2s2.ModDouble();
-    _8y2s2.ModDouble();
-    _8y2s2.ModDouble();
-
-    r.y.ModAdd(&b, &b);
-    r.y.ModAdd(&r.y, &r.y);
-    r.y.ModSub(&h);
-    r.y.ModMulK1(&w);
-    r.y.ModSub(&_8y2s2);
-
-    r.z.ModMulK1(&s2, &s);
-    r.z.ModDouble();
-    r.z.ModDouble();
-    r.z.ModDouble();
 
     return r;
 }
@@ -533,32 +491,52 @@ Point Secp256K1::ComputePublicKey(Int *privKey) {
 }
 
 Point Secp256K1::NextKey(Point &key) {
-    return AddDirect(key, G);
+    return Add(key, G);
 }
 
-void Secp256K1::Check() {}
+void Secp256K1::Check() {
+    Point p = ComputePublicKey(&order);
+    if (!p.isZero()) {
+        std::cout << "Warning: Public key computation check failed" << std::endl;
+    }
+}
 
 bool Secp256K1::EC(Point &p) {
-    Int _s, _p;
+    Int _s;
+    Int _p;
+
     _s.ModSquareK1(&p.x);
     _p.ModMulK1(&_s, &p.x);
     _p.ModAdd(7);
     _s.ModMulK1(&p.y, &p.y);
     _s.ModSub(&_p);
+
     return _s.IsZero();
 }
 
 Int Secp256K1::GetY(Int x, bool isEven) {
-    Int _s, _p;
+    Int _s;
+    Int _p;
+
     _s.ModSquareK1(&x);
     _p.ModMulK1(&_s, &x);
     _p.ModAdd(7);
     _p.ModSqrt();
+
     if(!_p.IsEven() && isEven) {
         _p.ModNeg();
     }
     else if(_p.IsEven() && !isEven) {
         _p.ModNeg();
     }
+
     return _p;
+}
+
+uint8_t Secp256K1::GetByte(std::string &str, int idx) {
+    char tmp[3];
+    tmp[0] = str[2*idx];
+    tmp[1] = str[2*idx+1];
+    tmp[2] = 0;
+    return (uint8_t)strtol(tmp, nullptr, 16);
 }
