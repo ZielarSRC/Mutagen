@@ -101,8 +101,10 @@ extern "C" void sha256_avx512_32blocks(const uint8_t* data[32], uint8_t* out[32]
 
     // Store results
     for (int lane = 0; lane < 32; lane++) {
+        alignas(64) uint32_t tmp[16];
         for (int i = 0; i < 8; i++) {
-            uint32_t val = _mm512_extract_epi32(state[i], lane);
+            _mm512_store_si512(tmp, state[i]);
+            uint32_t val = tmp[lane];
 #if defined(_MSC_VER)
             val = _byteswap_ulong(val);
 #else
