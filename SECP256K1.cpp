@@ -6,7 +6,6 @@
 #include <vector>
 #include <iomanip>
 #include <algorithm>
-#include <iostream>
 
 static Int SECP256K1_P([]{
     Int p;
@@ -32,30 +31,17 @@ Secp256K1::Secp256K1() {}
 Secp256K1::~Secp256K1() {}
 
 void Secp256K1::Init() {
-    std::cout << "🔧 Inicjalizacja SECP256K1 - krok 1: tworzenie obiektu..." << std::endl;
-    
     Int P;
     P.SetBase16("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F");
     Int::SetupField(&P);
-    
     G.x.SetBase16("79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798");
     G.y.SetBase16("483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8");
     G.z.SetInt32(1);
     order.SetBase16("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141");
-    
-    std::cout << "🔧 Inicjalizacja SECP256K1 - krok 2: wywołanie Init()..." << std::endl;
-    
     Int::InitK1(&order);
 
-    std::cout << "🔧 Inicjalizacja SECP256K1 - krok 3: budowanie tabeli generatora..." << std::endl;
-    
-    // Compute Generator table
     Point N(G);
     for(int i = 0; i < 32; i++) {
-        if (i % 8 == 0) {
-            std::cout << "🔧 Generowanie tabeli: " << (i * 100 / 32) << "% (" << i << "/32)" << std::endl;
-        }
-        
         GTable[i * 256] = N;
         N = DoubleDirect(N);
         for (int j = 1; j < 255; j++) {
@@ -64,8 +50,6 @@ void Secp256K1::Init() {
         }
         GTable[i * 256 + 255] = N;
     }
-    
-    std::cout << "✅ Inicjalizacja SECP256K1 zakończona pomyślnie!" << std::endl;
 }
 
 // --------- AVX-512 batch hash160 helpers ---------
