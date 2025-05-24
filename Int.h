@@ -272,28 +272,48 @@ static inline uint64_t my_rdtsc() {
 
 #endif
 
+// Implementacja 128-bitowego mnożenia za pomocą instrukcji 64-bitowych
+inline __m512i _mm512_mulhi_epu64_custom(__m512i a, __m512i b) {
+    alignas(64) uint64_t av[8], bv[8], result[8];
+    _mm512_store_si512((__m512i*)av, a);
+    _mm512_store_si512((__m512i*)bv, b);
+    
+    for (int i = 0; i < 8; i++) {
+        uint64_t high;
+        _umul128(av[i], bv[i], &high);
+        result[i] = high;
+    }
+    
+    return _mm512_load_si512((__m512i*)result);
+}
+
+// Poprawiona implementacja porównania dla AVX-512
+inline __mmask8 _mm512_cmpgt_epi64_custom(__m512i a, __m512i b) {
+    return _mm512_cmpgt_epu64_mask(a, b);
+}
+
 // Optimized 512-bit multiplication using AVX-512
 inline void avx512_mul(const uint64_t *a, const uint64_t *b, uint64_t *res) {
     __m512i va = _mm512_loadu_si512(a);
     __m512i vb = _mm512_loadu_si512(b);
     
-    // Perform 64x64->128 bit multiplication
+    // Użyj niestandardowej implementacji mulhi
     __m512i lo = _mm512_mullo_epi64(va, vb);
-    __m512i hi = _mm512_mulhi_epu64(va, vb);
+    __m512i hi = _mm512_mulhi_epu64_custom(va, vb);
     
     // Store results
     _mm512_storeu_si512(res, lo);
     _mm512_storeu_si512(res + 8, hi);
 }
 
-// Optimized modular addition
+// Optimized modular addition with proper mask handling
 inline void avx512_mod_add(uint64_t *a, uint64_t *b, uint64_t *mod, uint64_t *res) {
     __m512i va = _mm512_loadu_si512(a);
     __m512i vb = _mm512_loadu_si512(b);
     __m512i vmod = _mm512_loadu_si512(mod);
     
     __m512i sum = _mm512_add_epi64(va, vb);
-    __m512i cmp = _mm512_cmpgt_epi64(sum, vmod);
+    __mmask8 cmp = _mm512_cmpgt_epu64_mask(sum, vmod);
     __m512i res_vec = _mm512_mask_sub_epi64(sum, cmp, sum, vmod);
     
     _mm512_storeu_si512(res, res_vec);
@@ -312,14 +332,14 @@ inline void avx512_shift_right(uint64_t *a, unsigned n, uint64_t *res) {
     _mm512_storeu_si512(res, shifted);
 }
 
-// Helper macros for AVX-512 operations
+// Helper macros for AVX-512 operations - updated to use proper functions
 #define AVX512_LOAD(a) _mm512_loadu_si512((__m512i*)(a))
 #define AVX512_STORE(a, v) _mm512_storeu_si512((__m512i*)(a), v)
 #define AVX512_ADD(a, b) _mm512_add_epi64(a, b)
 #define AVX512_SUB(a, b) _mm512_sub_epi64(a, b)
 #define AVX512_MUL_LO(a, b) _mm512_mullo_epi64(a, b)
-#define AVX512_MUL_HI(a, b) _mm512_mulhi_epu64(a, b)
-#define AVX512_CMPGT(a, b) _mm512_cmpgt_epi64(a, b)
+#define AVX512_MUL_HI(a, b) _mm512_mulhi_epu64_custom(a, b)
+#define AVX512_CMPGT(a, b) _mm512_cmpgt_epu64_mask(a, b)
 #define AVX512_MASK_SUB(mask, a, b) _mm512_mask_sub_epi64(a, mask, a, b)
 
 #endif // BIGINTH
