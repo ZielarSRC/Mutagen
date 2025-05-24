@@ -48,7 +48,6 @@ public:
     Point AddDirect(Point &p1, Point &p2);
     Point Double(Point &p);
     Point DoubleDirect(Point &p);
-    Point DoubleDirect_Safe(Point &p);  // DODANE dla Xeona
 
     Point G;                 // Generator
     Int   order;             // Curve order
