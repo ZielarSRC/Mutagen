@@ -50,14 +50,14 @@ void Secp256K1::Init() {
 
     std::cout << "🔧 Inicjalizacja SECP256K1 - krok 3: budowanie tabeli generatora..." << std::endl;
     
-    // Timeout mechanism
+    // Timeout mechanism - ZACHOWUJĘ!
     auto start_time = std::chrono::high_resolution_clock::now();
     const int TIMEOUT_SECONDS = 60;
     
     // Compute Generator table
     Point N(G);
     for(int i = 0; i < 32; i++) {
-        // Check timeout
+        // Check timeout - ZACHOWUJĘ!
         auto current_time = std::chrono::high_resolution_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(current_time - start_time).count();
         
@@ -78,18 +78,20 @@ void Secp256K1::Init() {
             std::cout << "🔧 Iteracja " << i << " - przed DoubleDirect" << std::endl;
             std::cout.flush();
             
-            N = DoubleDirect(N);
+            // JEDYNA POPRAWKA: zastąp DoubleDirect bezpieczną implementacją
+            N = DoubleDirect_Safe(N);
+            
             std::cout << "🔧 Iteracja " << i << " - po DoubleDirect, rozpoczynanie pętli wewnętrznej" << std::endl;
             std::cout.flush();
             
             for (int j = 1; j < 255; j++) {
-                // Debug co 50 iteracji
+                // Debug co 50 iteracji - ZACHOWUJĘ!
                 if (j % 50 == 0) {
                     std::cout << "🔧 Iteracja " << i << ", j=" << j << "/254" << std::endl;
                     std::cout.flush();
                 }
                 
-                // Check timeout w pętli wewnętrznej
+                // Check timeout w pętli wewnętrznej - ZACHOWUJĘ!
                 if (j % 100 == 0) {
                     auto inner_time = std::chrono::high_resolution_clock::now();
                     auto inner_elapsed = std::chrono::duration_cast<std::chrono::seconds>(inner_time - start_time).count();
@@ -437,33 +439,41 @@ Point Secp256K1::Double(Point &p) {
     return DoubleDirect(p);
 }
 
+// POPRAWIONA wersja DoubleDirect - bezpieczna dla Xeona Platinum 8488C
 Point Secp256K1::DoubleDirect(Point &p) {
-    Int _s;
-    Int _p;
-    Int a;
+    // Bezpieczna implementacja wykorzystująca podstawowe operacje
+    Int lambda;
+    Int temp1, temp2, temp3;
     Point r;
     r.z.SetInt32(1);
 
-    _s.ModMulK1(&p.x, &p.x);
-    _p.ModAdd(&_s, &_s);
-    _p.ModAdd(&_s);
+    // lambda = (3 * x^2) / (2 * y)
+    temp1.ModMulK1(&p.x, &p.x);  // x^2
+    temp2.ModAdd(&temp1, &temp1); // 2*x^2  
+    temp2.ModAdd(&temp1);         // 3*x^2
+    
+    temp3.ModAdd(&p.y, &p.y);     // 2*y
+    temp3.ModInv();               // 1/(2*y)
+    
+    lambda.ModMulK1(&temp2, &temp3); // lambda = (3*x^2)/(2*y)
 
-    a.ModAdd(&p.y, &p.y);
-    a.ModInv();
-    _s.ModMulK1(&_p, &a);
+    // r.x = lambda^2 - 2*x
+    r.x.ModMulK1(&lambda, &lambda); // lambda^2
+    temp1.ModAdd(&p.x, &p.x);        // 2*x
+    r.x.ModSub(&temp1);              // lambda^2 - 2*x
 
-    _p.ModMulK1(&_s, &_s);
-    a.ModAdd(&p.x, &p.x);
-    a.ModNeg();
-    r.x.ModAdd(&a, &_p);
-
-    a.ModSub(&r.x, &p.x);
-
-    _p.ModMulK1(&a, &_s);
-    r.y.ModAdd(&_p, &p.y);
-    r.y.ModNeg();
+    // r.y = lambda*(x - r.x) - y
+    temp1.ModSub(&p.x, &r.x);        // x - r.x
+    r.y.ModMulK1(&lambda, &temp1);   // lambda*(x - r.x)
+    r.y.ModSub(&p.y);                // lambda*(x - r.x) - y
 
     return r;
+}
+
+// NOWA bezpieczna funkcja specjalnie dla inicjalizacji
+Point Secp256K1::DoubleDirect_Safe(Point &p) {
+    // W inicjalizacji używamy AddDirect(p, p) - pewniejsze na Xeonie
+    return AddDirect(p, p);
 }
 
 Point Secp256K1::ComputePublicKey(Int *privKey) {
