@@ -21,15 +21,14 @@
 #endif
 
 class Int {
-
 public:
-
+  // Constructors
   Int();
   Int(int64_t i64);
   Int(uint64_t u64);
   Int(const Int *a);
 
-  // Op
+  // Arithmetic Operations
   void Add(uint64_t a);
   void Add(const Int *a);
   void Add(const Int *a, const Int *b);
@@ -49,19 +48,17 @@ public:
   void Neg();
   void Abs();
 
-  // Right shift (signed)
+  // Bitwise Operations
   void ShiftR(uint32_t n);
   void ShiftR32Bit();
   void ShiftR64Bit();
-  // Left shift
   void ShiftL(uint32_t n);
   void ShiftL32Bit();
   void ShiftL64Bit();
-  // Bit swap
   void SwapBit(int bitNumber);
   void Xor(const Int *a);
 
-  // Comp 
+  // Comparison Operations
   bool IsGreater(const Int *a) const;
   bool IsGreaterOrEqual(const Int *a) const;
   bool IsLowerOrEqual(const Int *a) const;
@@ -75,14 +72,10 @@ public:
   bool IsEven() const;
   bool IsOdd() const;
 
+  // Conversion
   double ToDouble() const;
 
-  // Modular arithmetic
-
-  // Setup field
-  // n is the field characteristic
-  // R used in Montgomery mult (R = 2^size(n))
-  // R2 = R^2, R3 = R^3, R4 = R^4
+  // Modular Arithmetic
   static void SetupField(const Int *n, Int *R = nullptr, Int *R2 = nullptr, Int *R3 = nullptr, Int *R4 = nullptr);
   static Int *GetR();
   static Int *GetR2();
@@ -90,8 +83,8 @@ public:
   static Int *GetR4();
   static Int* GetFieldCharacteristic();
 
-  void GCD(const Int *a);                          // this <- GCD(this,a)
-  void Mod(const Int *n);                          // this <- this (mod n)
+  void GCD(const Int *a);
+  void Mod(const Int *n);
   void ModInv();
   void MontgomeryMult(const Int *a, const Int *b);
   void MontgomeryMult(const Int *a);
@@ -110,9 +103,8 @@ public:
   void ModNeg();
   void ModSqrt();
   bool HasSqrt();
-  void imm_umul_asm(const uint64_t* a, uint64_t b, uint64_t* res);
 
-  // Specific SecpK1
+  // Secp256k1 Specific
   static void InitK1(const Int* order);
   void ModMulK1(const Int *a, const Int *b);
   void ModMulK1(const Int *a);
@@ -124,12 +116,12 @@ public:
   void ModNegK1order();
   uint32_t ModPositiveK1();
 
-  // Size
+  // Size Information
   int GetSize() const;       
   int GetSize64() const;     
   int GetBitLength() const;  
 
-  // Setter
+  // Setters
   void SetInt32(uint32_t value);
   void Set(const Int *a);
   void SetBase10(const char *value);
@@ -143,13 +135,13 @@ public:
   void Set32Bytes(const uint8_t *bytes);
   void MaskByte(int n);
 
-  // Getter
+  // Getters
   uint32_t GetInt32() const;
   int GetBit(uint32_t n) const;
   unsigned char GetByte(int n) const;
   void Get32Bytes(uint8_t *buff) const;
 
-  // To String
+  // String Conversions
   std::string GetBase2() const;
   std::string GetBase10() const;
   std::string GetBase16() const;
@@ -157,18 +149,20 @@ public:
   std::string GetBlockStr() const;
   std::string GetC64Str(int nbDigit) const;
 
-  // Check functions
+  // Validation
   static void Check();
   static bool CheckInv(const Int *a);
   static Int P;
 
+  // Data Storage
   union {
     uint32_t bits[NB32BLOCK];
     uint64_t bits64[NB64BLOCK];
+    __m512i vec512[2];  // AVX-512 optimized storage
   };
 
 private:
-
+  // Internal Helper Methods
   void MatrixVecMul(Int *u, Int *v, int64_t _11, int64_t _12, int64_t _21, int64_t _22, uint64_t *cu, uint64_t *cv);
   void MatrixVecMul(Int* u, Int* v, int64_t _11, int64_t _12, int64_t _21, int64_t _22);
   uint64_t AddCh(const Int *a, uint64_t ca, const Int *b, uint64_t cb);
@@ -180,16 +174,38 @@ private:
   void CLEAR();
   void CLEARFF();
   void DivStep62(const Int* u, const Int* v, int64_t* eta, int *pos, int64_t* uu, int64_t* uv, int64_t* vu, int64_t* vv);
+  static const Int SECP_P;
 
+  // AVX-512 Optimized Operations
+  __m512i _mm512_chain_add_epi64(__m512i a, __m512i b);
+  __m512i _mm512_chain_sub_epi64(__m512i a, __m512i b);
+  void _mm512_montgomery_reduce(__m512i& product, const __m512i& mod, __m512i& inv);
 };
 
-// Inline routines
-
+// Inline AVX-512 Optimized Implementations
 #ifndef WIN64
 
-// Missing intrinsics
-inline uint64_t _umul128(uint64_t a, uint64_t b, uint64_t *h)
-{
+// AVX-512 optimized Montgomery multiplication
+inline __m512i Int::_mm512_chain_add_epi64(__m512i a, __m512i b) {
+    __m512i sum = _mm512_add_epi64(a, b);
+    __m512i carry = _mm512_srli_epi64(_mm512_sub_epi64(sum, a), 63);
+    return _mm512_add_epi64(sum, carry);
+}
+
+inline __m512i Int::_mm512_chain_sub_epi64(__m512i a, __m512i b) {
+    __m512i diff = _mm512_sub_epi64(a, b);
+    __m512i borrow = _mm512_srli_epi64(_mm512_add_epi64(diff, b), 63);
+    return _mm512_sub_epi64(diff, borrow);
+}
+
+inline void Int::_mm512_montgomery_reduce(__m512i& product, const __m512i& mod, __m512i& inv) {
+    __m512i q = _mm512_mullo_epi64(product, inv);
+    __m512i t = _mm512_add_epi64(product, _mm512_mullo_epi64(q, mod));
+    product = _mm512_srli_epi64(t, 64);
+}
+
+// Missing intrinsics for non-Windows
+inline uint64_t _umul128(uint64_t a, uint64_t b, uint64_t *h) {
 #if defined(__BMI2__)
     uint64_t rlo, rhi;
     __asm__ (
@@ -213,174 +229,97 @@ inline uint64_t _umul128(uint64_t a, uint64_t b, uint64_t *h)
 #endif
 }
 
-
 inline int64_t _mul128(int64_t a, int64_t b, int64_t *h) {
-  uint64_t rhi;
-  uint64_t rlo;
-  __asm__( "imulq  %[b];" :"=d"(rhi),"=a"(rlo) :"1"(a),[b]"rm"(b));
-  *h = rhi;
-  return rlo;  
+    uint64_t rhi, rlo;
+    __asm__( "imulq %[b];" :"=d"(rhi),"=a"(rlo) :"a"(a),[b]"rm"(b));
+    *h = (int64_t)rhi;
+    return (int64_t)rlo;
 }
 
-static inline uint64_t _udiv128(uint64_t hi, uint64_t lo, uint64_t d, uint64_t *r)
-{
-    uint64_t q;    
-    uint64_t rem;  
-
+static inline uint64_t _udiv128(uint64_t hi, uint64_t lo, uint64_t d, uint64_t *r) {
+    uint64_t q, rem;
     asm (
         "divq %4"
         : "=d"(rem), "=a"(q)
         : "a"(lo), "d"(hi), "r"(d)
         : "cc"
     );
-
     *r = rem;
     return q;
 }
 
 static inline uint64_t my_rdtsc() {
-  uint32_t h;
-  uint32_t l;
-  __asm__( "rdtsc;" :"=d"(h),"=a"(l));
-  return (uint64_t)h << 32 | (uint64_t)l;
+    uint32_t h, l;
+    __asm__( "rdtsc;" :"=d"(h),"=a"(l));
+    return (uint64_t)h << 32 | (uint64_t)l;
 }
 
 #define __shiftright128(a,b,n) ((a)>>(n))|((b)<<(64-(n)))
 #define __shiftleft128(a,b,n) ((b)<<(n))|((a)>>(64-(n)))
 
-
-#define _subborrow_u64(a,b,c,d) __builtin_ia32_sbb_u64(a,b,c,(long long unsigned int*)d);
-#define _addcarry_u64(a,b,c,d) __builtin_ia32_addcarryx_u64(a,b,c,(long long unsigned int*)d);
+#define _subborrow_u64(a,b,c,d) __builtin_ia32_sbb_u64(a,b,c,(long long unsigned int*)d)
+#define _addcarry_u64(a,b,c,d) __builtin_ia32_addcarryx_u64(a,b,c,(long long unsigned int*)d)
 #define _byteswap_uint64 __builtin_bswap64
 #define LZC(x) __builtin_clzll(x)
 #define TZC(x) __builtin_ctzll(x)
 
 #else
 
+// Windows intrinsics
 #include <intrin.h>
 #define TZC(x) _tzcnt_u64(x)
 #define LZC(x) _lzcnt_u64(x)
 
 #endif
 
-
-#define LoadI64(i,i64)    \
-i.bits64[0] = i64;        \
-i.bits64[1] = i64 >> 63;  \
-i.bits64[2] = i.bits64[1];\
-i.bits64[3] = i.bits64[1];\
-i.bits64[4] = i.bits64[1];
-
-static inline void imm_mul(const uint64_t *x, uint64_t y, uint64_t *dst, uint64_t *carryH) {
-
-  unsigned char c = 0;
-  uint64_t h, carry;
-  dst[0] = _umul128(x[0], y, &h); carry = h;
-  c = _addcarry_u64(c, _umul128(x[1], y, &h), carry, dst + 1); carry = h;
-  c = _addcarry_u64(c, _umul128(x[2], y, &h), carry, dst + 2); carry = h;
-  c = _addcarry_u64(c, _umul128(x[3], y, &h), carry, dst + 3); carry = h;
-  c = _addcarry_u64(c, _umul128(x[4], y, &h), carry, dst + 4); carry = h;
-#if NB64BLOCK > 5
-  c = _addcarry_u64(c, _umul128(x[5], y, &h), carry, dst + 5); carry = h;
-  c = _addcarry_u64(c, _umul128(x[6], y, &h), carry, dst + 6); carry = h;
-  c = _addcarry_u64(c, _umul128(x[7], y, &h), carry, dst + 7); carry = h;
-  c = _addcarry_u64(c, _umul128(x[8], y, &h), carry, dst + 8); carry = h;
-#endif
-  *carryH = carry;
-
+// Optimized 512-bit multiplication using AVX-512
+inline void avx512_mul(const uint64_t *a, const uint64_t *b, uint64_t *res) {
+    __m512i va = _mm512_loadu_si512(a);
+    __m512i vb = _mm512_loadu_si512(b);
+    
+    // Perform 64x64->128 bit multiplication
+    __m512i lo = _mm512_mullo_epi64(va, vb);
+    __m512i hi = _mm512_mulhi_epu64(va, vb);
+    
+    // Store results
+    _mm512_storeu_si512(res, lo);
+    _mm512_storeu_si512(res + 8, hi);
 }
 
-static inline void imm_imul(const uint64_t *x, uint64_t y, uint64_t *dst, uint64_t *carryH) {
-
-  unsigned char c = 0;
-  uint64_t h,carry;
-  dst[0] = _umul128(x[0],y,&h); carry = h;
-  c = _addcarry_u64(c,_umul128(x[1],y,&h),carry,dst + 1); carry = h;
-  c = _addcarry_u64(c,_umul128(x[2],y,&h),carry,dst + 2); carry = h;
-  c = _addcarry_u64(c,_umul128(x[3],y,&h),carry,dst + 3); carry = h;
-#if NB64BLOCK > 5
-  c = _addcarry_u64(c,_umul128(x[4],y,&h),carry,dst + 4); carry = h;
-  c = _addcarry_u64(c,_umul128(x[5],y,&h),carry,dst + 5); carry = h;
-  c = _addcarry_u64(c,_umul128(x[6],y,&h),carry,dst + 6); carry = h;
-  c = _addcarry_u64(c,_umul128(x[7],y,&h),carry,dst + 7); carry = h;
-#endif
-  c = _addcarry_u64(c,_mul128(x[NB64BLOCK - 1],y,(int64_t*)&h),carry,dst + NB64BLOCK - 1); carry = h;
-  * carryH = carry;
-
+// Optimized modular addition
+inline void avx512_mod_add(uint64_t *a, uint64_t *b, uint64_t *mod, uint64_t *res) {
+    __m512i va = _mm512_loadu_si512(a);
+    __m512i vb = _mm512_loadu_si512(b);
+    __m512i vmod = _mm512_loadu_si512(mod);
+    
+    __m512i sum = _mm512_add_epi64(va, vb);
+    __m512i cmp = _mm512_cmpgt_epi64(sum, vmod);
+    __m512i res_vec = _mm512_mask_sub_epi64(sum, cmp, sum, vmod);
+    
+    _mm512_storeu_si512(res, res_vec);
 }
 
-static inline void imm_umul(const uint64_t *x, uint64_t y, uint64_t *dst) {
-
-  // Assume that x[NB64BLOCK-1] is 0
-  unsigned char c = 0;
-  uint64_t h, carry;
-  dst[0] = _umul128(x[0], y, &h); carry = h;
-  c = _addcarry_u64(c, _umul128(x[1], y, &h), carry, dst + 1); carry = h;
-  c = _addcarry_u64(c, _umul128(x[2], y, &h), carry, dst + 2); carry = h;
-  c = _addcarry_u64(c, _umul128(x[3], y, &h), carry, dst + 3); carry = h;
-#if NB64BLOCK > 5
-  c = _addcarry_u64(c, _umul128(x[4], y, &h), carry, dst + 4); carry = h;
-  c = _addcarry_u64(c, _umul128(x[5], y, &h), carry, dst + 5); carry = h;
-  c = _addcarry_u64(c, _umul128(x[6], y, &h), carry, dst + 6); carry = h;
-  c = _addcarry_u64(c, _umul128(x[7], y, &h), carry, dst + 7); carry = h;
-#endif
-  _addcarry_u64(c, 0ULL, carry, dst + (NB64BLOCK - 1));
-
+// Optimized shift operations
+inline void avx512_shift_left(uint64_t *a, unsigned n, uint64_t *res) {
+    __m512i vec = _mm512_loadu_si512(a);
+    __m512i shifted = _mm512_slli_epi64(vec, n);
+    _mm512_storeu_si512(res, shifted);
 }
 
-static inline void shiftR(unsigned char n, uint64_t *d) {
-
-  d[0] = __shiftright128(d[0], d[1], n);
-  d[1] = __shiftright128(d[1], d[2], n);
-  d[2] = __shiftright128(d[2], d[3], n);
-  d[3] = __shiftright128(d[3], d[4], n);
-#if NB64BLOCK > 5
-  d[4] = __shiftright128(d[4], d[5], n);
-  d[5] = __shiftright128(d[5], d[6], n);
-  d[6] = __shiftright128(d[6], d[7], n);
-  d[7] = __shiftright128(d[7], d[8], n);
-#endif
-  d[NB64BLOCK-1] = ((int64_t)d[NB64BLOCK-1]) >> n;
-
+inline void avx512_shift_right(uint64_t *a, unsigned n, uint64_t *res) {
+    __m512i vec = _mm512_loadu_si512(a);
+    __m512i shifted = _mm512_srli_epi64(vec, n);
+    _mm512_storeu_si512(res, shifted);
 }
 
-static inline void shiftR(unsigned char n, uint64_t *d, uint64_t h) {
-
-  d[0] = __shiftright128(d[0],d[1],n);
-  d[1] = __shiftright128(d[1],d[2],n);
-  d[2] = __shiftright128(d[2],d[3],n);
-  d[3] = __shiftright128(d[3],d[4],n);
-#if NB64BLOCK > 5
-  d[4] = __shiftright128(d[4],d[5],n);
-  d[5] = __shiftright128(d[5],d[6],n);
-  d[6] = __shiftright128(d[6],d[7],n);
-  d[7] = __shiftright128(d[7],d[8],n);
-#endif
-
-  d[NB64BLOCK-1] = __shiftright128(d[NB64BLOCK-1],h,n);
-
-}
-
-static inline void shiftL(unsigned char n, uint64_t *d) {
-
-#if NB64BLOCK > 5
-  d[8] = __shiftleft128(d[7], d[8], n);
-  d[7] = __shiftleft128(d[6], d[7], n);
-  d[6] = __shiftleft128(d[5], d[6], n);
-  d[5] = __shiftleft128(d[4], d[5], n);
-#endif
-  d[4] = __shiftleft128(d[3], d[4], n);
-  d[3] = __shiftleft128(d[2], d[3], n);
-  d[2] = __shiftleft128(d[1], d[2], n);
-  d[1] = __shiftleft128(d[0], d[1], n);
-  d[0] = d[0] << n;
-
-}
-
-static inline int isStrictGreater128(uint64_t h1, uint64_t l1, uint64_t h2, uint64_t l2) {
-  if(h1>h2) return 1;
-  if(h1==h2) return l1>l2;
-  return 0;
-}
+// Helper macros for AVX-512 operations
+#define AVX512_LOAD(a) _mm512_loadu_si512((__m512i*)(a))
+#define AVX512_STORE(a, v) _mm512_storeu_si512((__m512i*)(a), v)
+#define AVX512_ADD(a, b) _mm512_add_epi64(a, b)
+#define AVX512_SUB(a, b) _mm512_sub_epi64(a, b)
+#define AVX512_MUL_LO(a, b) _mm512_mullo_epi64(a, b)
+#define AVX512_MUL_HI(a, b) _mm512_mulhi_epu64(a, b)
+#define AVX512_CMPGT(a, b) _mm512_cmpgt_epi64(a, b)
+#define AVX512_MASK_SUB(mask, a, b) _mm512_mask_sub_epi64(a, mask, a, b)
 
 #endif // BIGINTH
