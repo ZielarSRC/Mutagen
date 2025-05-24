@@ -79,7 +79,6 @@ static void Transform(__m512i *s, uint8_t *blk[16]) {
 
     for (int i = 0; i < 16; ++i) w[i] = LOADW(i);
 
-    // --- 80 rund (identycznie jak oryginał, kopiuj wszystkie makra z pierwowzoru) ---
     R11(a1, b1, c1, d1, e1, w[0], 11);   R12(a2, b2, c2, d2, e2, w[5], 8);
     R11(e1, a1, b1, c1, d1, w[1], 14);   R12(e2, a2, b2, c2, d2, w[14], 9);
     R11(d1, e1, a1, b1, c1, w[2], 15);   R12(d2, e2, a2, b2, c2, w[7], 9);
