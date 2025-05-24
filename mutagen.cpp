@@ -110,11 +110,11 @@ static constexpr int POINTS_BATCH_SIZE = 512;
 static constexpr int HASH_BATCH_SIZE = 32;
 
 const unordered_map<int, tuple<int, string, string>> PUZZLE_DATA = {
-	{20, {8, "b907c3a2a3b27789dfb509b730dd47703c272868",  "357535"}}, 
-    {21, {9, "29a78213caa9eea824acf08022ab9dfc83414f56",  "863317"}},
-    {22, {11, "7ff45303774ef7a52fffd8011981034b258cb86b", "1811764"}}, 
+    {20, {8, "b907c3a2a3b27789dfb509b730dd47703c272868", "357535"}},
+    {21, {9, "29a78213caa9eea824acf08022ab9dfc83414f56", "863317"}},
+    {22, {11, "7ff45303774ef7a52fffd8011981034b258cb86b", "1811764"}},
     {23, {12, "d0a79df189fe1ad5c306cc70497b358415da579e", "3007503"}},
-    {24, {9, "0959e80121f36aea13b3bad361c15dac26189e2f",  "5598802"}},
+    {24, {9, "0959e80121f36aea13b3bad361c15dac26189e2f", "5598802"}},
     {25, {12, "2f396b29b27324300d0c59b17c3abc1835bd3dbb", "14428676"}},
     {26, {14, "bfebb73562d4541b32a02ba664d140b5a574792f", "33185509"}},
     {27, {13, "0c7aaf6caa7e5424b63d317f0f8f1f9fa40d5560", "54538862"}},
@@ -127,7 +127,7 @@ const unordered_map<int, tuple<int, string, string>> PUZZLE_DATA = {
     {34, {16, "f6d67d7983bf70450f295c9cb828daab265f1bfa", "7137437912"}},
     {35, {19, "f6d8ce225ffbdecec170f8298c3fc28ae686df25", "14133072157"}},
     {36, {14, "74b1e012be1521e5d8d75e745a26ced845ea3d37", "20112871792"}},
-    {37, {23, "28c30fb9118ed1da72e7c4f89c0164756e8a021d",  "42387769980"}},
+    {37, {23, "28c30fb9118ed1da72e7c4f89c0164756e8a021d", "42387769980"}},
     {38, {21, "b190e2d40cfdeee2cee072954a2be89e7ba39364", "100251560595"}},
     {39, {23, "0b304f2a79a027270276533fe1ed4eff30910876", "146971536592"}},
     {40, {20, "95a156cd21b4a69de969eb6716864f4c8b82a82a", "323724968937"}},
@@ -161,8 +161,7 @@ const unordered_map<int, tuple<int, string, string>> PUZZLE_DATA = {
     {68, {42, "e0b8a2baee1b77fc703455f39d51477451fc8cfc", "132656943602386256302"}},
     {69, {34, "61eb8a50c86b0584bb727dd65bed8d2400d6d5aa", "219898266213316039825"}},
     {70, {29, "5db8cda53a6a002db10365967d7f85d19e171b10", "297274491920375905804"}},
-    {71, {29, "f6f5431d25bbf7b12e8add9af5e3475c44a0a5b8", "970436974005023690481"}}
-};
+    {71, {29, "f6f5431d25bbf7b12e8add9af5e3475c44a0a5b8", "970436974005023690481"}}};
 
 vector<unsigned char> TARGET_HASH160_RAW(20);
 string TARGET_HASH160;
@@ -409,6 +408,7 @@ void worker(Secp256K1* secp, int bit_length, int flip_count, int threadId, AVXCo
       deltaX[i].ModSub(&plusPoints[i].x, &startPointX);
     }
 
+    modGroup.Set(deltaX);
     modGroup.ModInv();
 
 #pragma omp simd
