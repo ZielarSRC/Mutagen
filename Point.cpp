@@ -26,6 +26,12 @@ void Point::Clear() {
   z.SetInt32(0);
 }
 
+void Point::Set(Point &p) {
+  x.Set(&p.x);
+  y.Set(&p.y);
+  z.Set(&p.z);
+}
+
 void Point::Set(Int *cx, Int *cy, Int *cz) {
   x.Set(cx);
   y.Set(cy);
