@@ -411,8 +411,6 @@ void Secp256K1::Init() {
     return r;
   }
 
-  Point Secp256K1::DoubleDirect_Safe(Point & p) { return DoubleDirect(p); }
-
   Point Secp256K1::ComputePublicKey(Int * privKey) {
     int i = 0;
     uint8_t b;
