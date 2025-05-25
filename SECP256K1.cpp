@@ -34,162 +34,219 @@ Secp256K1::Secp256K1() {}
 Secp256K1::~Secp256K1() {}
 
 void Secp256K1::Init() {
-    Int P;
-    P.SetBase16("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F");
-    Int::SetupField(&P);
-    G.x.SetBase16("79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798");
-    G.y.SetBase16("483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8");
-    G.z.SetInt32(1);
-    order.SetBase16("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141");
-    Int::InitK1(&order);
+  Int P;
+  P.SetBase16("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F");
+  Int::SetupField(&P);
+  G.x.SetBase16("79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798");
+  G.y.SetBase16("483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8");
+  G.z.SetInt32(1);
+  order.SetBase16("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141");
+  Int::InitK1(&order);
 
-    Point N(G);
-    for (int i = 0; i < 32; i++) {
-        N.Reduce();
-        GTable[i * 256] = N;
-        N = DoubleDirect(N);
-        for (int j = 1; j < 255; j++) {
-            N.Reduce();
-            GTable[i * 256 + j] = N;
-            N = AddDirect(N, GTable[i * 256]);
-        }
-        N.Reduce();
-        GTable[i * 256 + 255] = N;
+  Point N(G);
+  for (int i = 0; i < 32; i++) {
+    N.Reduce();
+    GTable[i * 256] = N;
+    N = DoubleDirect(N);
+    for (int j = 1; j < 255; j++) {
+      N.Reduce();
+      GTable[i * 256 + j] = N;
+      N = AddDirect(N, GTable[i * 256]);
     }
+    N.Reduce();
+    GTable[i * 256 + 255] = N;
+  }
 }
 
-  // --------- AVX-512 batch hash160 helpers ---------
+// --------- AVX-512 batch hash160 helpers ---------
 
-  void Secp256K1::GetHash160_Batch16(int type, bool compressed, Point* pubkeys[16],
-                                     uint8_t* hashes[16]) {
-    alignas(64) uint8_t pubkey_ser[16][33];
-    const uint8_t* in[16];
-    uint8_t* out[16];
-    for (int i = 0; i < 16; ++i) {
-      SerializePublicKey(*pubkeys[i], compressed, pubkey_ser[i]);
-      in[i] = pubkey_ser[i];
-      out[i] = hashes[i];
-    }
-    alignas(64) uint8_t sha[16][32];
-    const uint8_t* sha_in[16];
-    uint8_t* sha_out[16];
-    for (int i = 0; i < 16; ++i) {
-      sha_in[i] = in[i];
-      sha_out[i] = sha[i];
-    }
-    sha256_avx512_16blocks(sha_in, sha_out);
-    ripemd160_avx512_16blocks((const uint8_t**)sha, out);
+void Secp256K1::GetHash160_Batch16(int type, bool compressed, Point* pubkeys[16],
+                                   uint8_t* hashes[16]) {
+  alignas(64) uint8_t pubkey_ser[16][33];
+  const uint8_t* in[16];
+  uint8_t* out[16];
+  for (int i = 0; i < 16; ++i) {
+    SerializePublicKey(*pubkeys[i], compressed, pubkey_ser[i]);
+    in[i] = pubkey_ser[i];
+    out[i] = hashes[i];
+  }
+  alignas(64) uint8_t sha[16][32];
+  const uint8_t* sha_in[16];
+  uint8_t* sha_out[16];
+  for (int i = 0; i < 16; ++i) {
+    sha_in[i] = in[i];
+    sha_out[i] = sha[i];
+  }
+  sha256_avx512_16blocks(sha_in, sha_out);
+  ripemd160_avx512_16blocks((const uint8_t**)sha, out);
+}
+
+void Secp256K1::GetHash160_Batch8(int type, bool compressed, Point* pubkeys[8],
+                                  uint8_t* hashes[8]) {
+  alignas(64) uint8_t pubkey_ser[16][33] = {};
+  const uint8_t* in[16] = {};
+  uint8_t* out[16] = {};
+  for (int i = 0; i < 8; ++i) {
+    SerializePublicKey(*pubkeys[i], compressed, pubkey_ser[i]);
+    in[i] = pubkey_ser[i];
+    out[i] = hashes[i];
+  }
+  for (int i = 8; i < 16; ++i) {
+    in[i] = pubkey_ser[i];
+    out[i] = pubkey_ser[i];
+  }
+  alignas(64) uint8_t sha[16][32];
+  const uint8_t* sha_in[16];
+  uint8_t* sha_out[16];
+  for (int i = 0; i < 16; ++i) {
+    sha_in[i] = in[i];
+    sha_out[i] = sha[i];
+  }
+  sha256_avx512_16blocks(sha_in, sha_out);
+  ripemd160_avx512_16blocks((const uint8_t**)sha, out);
+}
+
+void Secp256K1::GetHash160_Batch4(int type, bool compressed, Point* pubkeys[4],
+                                  uint8_t* hashes[4]) {
+  alignas(64) uint8_t pubkey_ser[16][33] = {};
+  const uint8_t* in[16] = {};
+  uint8_t* out[16] = {};
+  for (int i = 0; i < 4; ++i) {
+    SerializePublicKey(*pubkeys[i], compressed, pubkey_ser[i]);
+    in[i] = pubkey_ser[i];
+    out[i] = hashes[i];
+  }
+  for (int i = 4; i < 16; ++i) {
+    in[i] = pubkey_ser[i];
+    out[i] = pubkey_ser[i];
+  }
+  alignas(64) uint8_t sha[16][32];
+  const uint8_t* sha_in[16];
+  uint8_t* sha_out[16];
+  for (int i = 0; i < 16; ++i) {
+    sha_in[i] = in[i];
+    sha_out[i] = sha[i];
+  }
+  sha256_avx512_16blocks(sha_in, sha_out);
+  ripemd160_avx512_16blocks((const uint8_t**)sha, out);
+}
+
+void Secp256K1::GetHash160(int type, bool compressed, Point& pubKey, unsigned char* hash) {
+  alignas(64) uint8_t pubkey_ser[16][33] = {};
+  const uint8_t* in[16] = {};
+  uint8_t* out[16] = {};
+  SerializePublicKey(pubKey, compressed, pubkey_ser[0]);
+  in[0] = pubkey_ser[0];
+  out[0] = hash;
+  for (int i = 1; i < 16; ++i) {
+    in[i] = pubkey_ser[i];
+    out[i] = pubkey_ser[i];
+  }
+  alignas(64) uint8_t sha[16][32];
+  const uint8_t* sha_in[16];
+  uint8_t* sha_out[16];
+  for (int i = 0; i < 16; ++i) {
+    sha_in[i] = in[i];
+    sha_out[i] = sha[i];
+  }
+  sha256_avx512_16blocks(sha_in, sha_out);
+  ripemd160_avx512_16blocks((const uint8_t**)sha, out);
+}
+
+std::string Secp256K1::GetAddress(int type, bool compressed, Point& pubKey) {
+  unsigned char hash160[20];
+  GetHash160(type, compressed, pubKey, hash160);
+  return GetAddress(type, compressed, hash160);
+}
+
+std::string Secp256K1::GetAddress(int type, bool compressed, unsigned char* hash160) {
+  // POPRAWKA: Usunięto nieużywaną zmienną checksum
+  unsigned char address[25];
+
+  if (type == P2PKH) {
+    address[0] = 0x00;
+  } else if (type == P2SH) {
+    address[0] = 0x05;
   }
 
-  void Secp256K1::GetHash160_Batch8(int type, bool compressed, Point* pubkeys[8],
-                                    uint8_t* hashes[8]) {
-    alignas(64) uint8_t pubkey_ser[16][33] = {};
-    const uint8_t* in[16] = {};
-    uint8_t* out[16] = {};
-    for (int i = 0; i < 8; ++i) {
-      SerializePublicKey(*pubkeys[i], compressed, pubkey_ser[i]);
-      in[i] = pubkey_ser[i];
-      out[i] = hashes[i];
+  memcpy(address + 1, hash160, 20);
+
+  alignas(64) uint8_t inblock[16][32] = {};
+  const uint8_t* in[16] = {};
+  uint8_t* out[16] = {};
+  memcpy(inblock[0], address, 21);
+  in[0] = inblock[0];
+  out[0] = inblock[1];
+  sha256_avx512_16blocks(in, out);
+
+  in[0] = inblock[1];
+  out[0] = inblock[2];
+  sha256_avx512_16blocks(in, out);
+
+  memcpy(address + 21, inblock[2], 4);
+
+  std::string result;
+  const char* base58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
+  std::vector<uint8_t> data(address, address + 25);
+  std::vector<uint8_t> encoded;
+
+  for (size_t i = 0; i < data.size(); ++i) {
+    int carry = data[i];
+    for (size_t j = 0; j < encoded.size(); ++j) {
+      carry += encoded[j] * 256;
+      encoded[j] = carry % 58;
+      carry /= 58;
     }
-    for (int i = 8; i < 16; ++i) {
-      in[i] = pubkey_ser[i];
-      out[i] = pubkey_ser[i];
+    while (carry > 0) {
+      encoded.push_back(carry % 58);
+      carry /= 58;
     }
-    alignas(64) uint8_t sha[16][32];
-    const uint8_t* sha_in[16];
-    uint8_t* sha_out[16];
-    for (int i = 0; i < 16; ++i) {
-      sha_in[i] = in[i];
-      sha_out[i] = sha[i];
-    }
-    sha256_avx512_16blocks(sha_in, sha_out);
-    ripemd160_avx512_16blocks((const uint8_t**)sha, out);
   }
 
-  void Secp256K1::GetHash160_Batch4(int type, bool compressed, Point* pubkeys[4],
-                                    uint8_t* hashes[4]) {
-    alignas(64) uint8_t pubkey_ser[16][33] = {};
-    const uint8_t* in[16] = {};
-    uint8_t* out[16] = {};
-    for (int i = 0; i < 4; ++i) {
-      SerializePublicKey(*pubkeys[i], compressed, pubkey_ser[i]);
-      in[i] = pubkey_ser[i];
-      out[i] = hashes[i];
-    }
-    for (int i = 4; i < 16; ++i) {
-      in[i] = pubkey_ser[i];
-      out[i] = pubkey_ser[i];
-    }
-    alignas(64) uint8_t sha[16][32];
-    const uint8_t* sha_in[16];
-    uint8_t* sha_out[16];
-    for (int i = 0; i < 16; ++i) {
-      sha_in[i] = in[i];
-      sha_out[i] = sha[i];
-    }
-    sha256_avx512_16blocks(sha_in, sha_out);
-    ripemd160_avx512_16blocks((const uint8_t**)sha, out);
+  for (size_t i = 0; i < data.size() && data[i] == 0; ++i) {
+    result += base58[0];
   }
 
-  void Secp256K1::GetHash160(int type, bool compressed, Point& pubKey, unsigned char* hash) {
-    alignas(64) uint8_t pubkey_ser[16][33] = {};
-    const uint8_t* in[16] = {};
-    uint8_t* out[16] = {};
-    SerializePublicKey(pubKey, compressed, pubkey_ser[0]);
-    in[0] = pubkey_ser[0];
-    out[0] = hash;
-    for (int i = 1; i < 16; ++i) {
-      in[i] = pubkey_ser[i];
-      out[i] = pubkey_ser[i];
-    }
-    alignas(64) uint8_t sha[16][32];
-    const uint8_t* sha_in[16];
-    uint8_t* sha_out[16];
-    for (int i = 0; i < 16; ++i) {
-      sha_in[i] = in[i];
-      sha_out[i] = sha[i];
-    }
-    sha256_avx512_16blocks(sha_in, sha_out);
-    ripemd160_avx512_16blocks((const uint8_t**)sha, out);
+  for (int i = encoded.size() - 1; i >= 0; --i) {
+    result += base58[encoded[i]];
   }
 
-  std::string Secp256K1::GetAddress(int type, bool compressed, Point& pubKey) {
-    unsigned char hash160[20];
-    GetHash160(type, compressed, pubKey, hash160);
-    return GetAddress(type, compressed, hash160);
-  }
+  return result;
+}
 
-  std::string Secp256K1::GetAddress(int type, bool compressed, unsigned char* hash160) {
-    unsigned char checksum[32];
-    unsigned char address[25];
+std::vector<std::string> Secp256K1::GetAddress(int type, bool compressed, unsigned char* h1,
+                                               unsigned char* h2, unsigned char* h3,
+                                               unsigned char* h4) {
+  return {GetAddress(type, compressed, h1), GetAddress(type, compressed, h2),
+          GetAddress(type, compressed, h3), GetAddress(type, compressed, h4)};
+}
 
-    if (type == P2PKH) {
-      address[0] = 0x00;
-    } else if (type == P2SH) {
-      address[0] = 0x05;
-    }
+std::string Secp256K1::GetPrivAddress(bool compressed, Int& privKey) {
+  std::vector<uint8_t> data = {0x80};
+  uint8_t tmp[32];
+  privKey.Get32Bytes(tmp);
+  data.insert(data.end(), tmp, tmp + 32);
+  if (compressed) data.push_back(0x01);
 
-    memcpy(address + 1, hash160, 20);
+  alignas(64) uint8_t inblock[16][32] = {};
+  const uint8_t* in[16] = {};
+  uint8_t* out[16] = {};
+  memcpy(inblock[0], data.data(), data.size());
+  in[0] = inblock[0];
+  out[0] = inblock[1];
+  sha256_avx512_16blocks(in, out);
 
-    alignas(64) uint8_t inblock[16][32] = {};
-    const uint8_t* in[16] = {};
-    uint8_t* out[16] = {};
-    memcpy(inblock[0], address, 21);
-    in[0] = inblock[0];
-    out[0] = inblock[1];
-    sha256_avx512_16blocks(in, out);
+  in[0] = inblock[1];
+  out[0] = inblock[2];
+  sha256_avx512_16blocks(in, out);
 
-    in[0] = inblock[1];
-    out[0] = inblock[2];
-    sha256_avx512_16blocks(in, out);
+  data.insert(data.end(), inblock[2], inblock[2] + 4);
 
-    memcpy(address + 21, inblock[2], 4);
+  std::string result;
+  const char* base58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
-    std::string result;
-    const char* base58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-
-    std::vector<uint8_t> data(address, address + 25);
-    std::vector<uint8_t> encoded;
+  std::vector<uint8_t> encoded;
 
     for (size_t i = 0; i < data.size(); ++i) {
       int carry = data[i];
@@ -213,63 +270,7 @@ void Secp256K1::Init() {
     }
 
     return result;
-  }
-
-  std::vector<std::string> Secp256K1::GetAddress(int type, bool compressed, unsigned char* h1,
-                                                 unsigned char* h2, unsigned char* h3,
-                                                 unsigned char* h4) {
-    return {GetAddress(type, compressed, h1), GetAddress(type, compressed, h2),
-            GetAddress(type, compressed, h3), GetAddress(type, compressed, h4)};
-  }
-
-  std::string Secp256K1::GetPrivAddress(bool compressed, Int& privKey) {
-    std::vector<uint8_t> data = {0x80};
-    uint8_t tmp[32];
-    privKey.Get32Bytes(tmp);
-    data.insert(data.end(), tmp, tmp + 32);
-    if (compressed) data.push_back(0x01);
-
-    alignas(64) uint8_t inblock[16][32] = {};
-    const uint8_t* in[16] = {};
-    uint8_t* out[16] = {};
-    memcpy(inblock[0], data.data(), data.size());
-    in[0] = inblock[0];
-    out[0] = inblock[1];
-    sha256_avx512_16blocks(in, out);
-
-    in[0] = inblock[1];
-    out[0] = inblock[2];
-    sha256_avx512_16blocks(in, out);
-
-    data.insert(data.end(), inblock[2], inblock[2] + 4);
-
-    std::string result;
-    const char* base58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-
-    std::vector<uint8_t> encoded;
-    for (size_t i = 0; i < data.size(); ++i) {
-      int carry = data[i];
-      for (size_t j = 0; j < encoded.size(); ++j) {
-        carry += encoded[j] * 256;
-        encoded[j] = carry % 58;
-        carry /= 58;
-      }
-      while (carry > 0) {
-        encoded.push_back(carry % 58);
-        carry /= 58;
-      }
-    }
-
-    for (size_t i = 0; i < data.size() && data[i] == 0; ++i) {
-      result += base58[0];
-    }
-
-    for (int i = encoded.size() - 1; i >= 0; --i) {
-      result += base58[encoded[i]];
-    }
-
-    return result;
-  }
+}
 
   std::string Secp256K1::GetPublicKeyHex(bool compressed, Point& p) {
     uint8_t buffer[65];
