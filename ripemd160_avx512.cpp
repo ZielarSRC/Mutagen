@@ -34,20 +34,26 @@ static const unsigned char pad[128] = {0x80};
 #define R42(a, b, c, d, e, x, r) Round(a, b, c, d, e, f2(b, c, d), x, 0x7A6D76E9, r)
 #define R52(a, b, c, d, e, x, r) Round(a, b, c, d, e, f1(b, c, d), x, 0, r)
 
-#define LOADW(i)                                                                                   \
-  _mm512_set_epi32(*((uint32_t*)blk[0] + i), *((uint32_t*)blk[1] + i), *((uint32_t*)blk[2] + i),   \
-                   *((uint32_t*)blk[3] + i), *((uint32_t*)blk[4] + i), *((uint32_t*)blk[5] + i),   \
-                   *((uint32_t*)blk[6] + i), *((uint32_t*)blk[7] + i), *((uint32_t*)blk[8] + i),   \
-                   *((uint32_t*)blk[9] + i), *((uint32_t*)blk[10] + i), *((uint32_t*)blk[11] + i), \
-                   *((uint32_t*)blk[12] + i), *((uint32_t*)blk[13] + i),                           \
-                   *((uint32_t*)blk[14] + i), *((uint32_t*)blk[15] + i))
+// Safe version using union to avoid strict-aliasing violations
+#define LOADW(i) ({                                                                             \
+  union { uint32_t u32; uint8_t u8[4]; } conv[16];                                             \
+  for (int j = 0; j < 16; ++j) {                                                                \
+    std::memcpy(conv[j].u8, blk[j] + (i * 4), 4);                                              \
+  }                                                                                             \
+  _mm512_set_epi32(conv[0].u32, conv[1].u32, conv[2].u32, conv[3].u32, conv[4].u32, conv[5].u32, \
+                   conv[6].u32, conv[7].u32, conv[8].u32, conv[9].u32, conv[10].u32, conv[11].u32, \
+                   conv[12].u32, conv[13].u32, conv[14].u32, conv[15].u32);                    \
+})
 
-#define DEPACK(d, i)                         \
-  ((uint32_t*)d)[0] = ((uint32_t*)&s[0])[i]; \
-  ((uint32_t*)d)[1] = ((uint32_t*)&s[1])[i]; \
-  ((uint32_t*)d)[2] = ((uint32_t*)&s[2])[i]; \
-  ((uint32_t*)d)[3] = ((uint32_t*)&s[3])[i]; \
-  ((uint32_t*)d)[4] = ((uint32_t*)&s[4])[i];
+// Fixed DEPACK - extract from each of the 5 state vectors
+#define DEPACK(d, i) do {                                      \
+  union { uint32_t u32[16]; __m512i vec; } temp;              \
+  temp.vec = s[0]; std::memcpy((uint8_t*)d + 0,  &temp.u32[i], 4); \
+  temp.vec = s[1]; std::memcpy((uint8_t*)d + 4,  &temp.u32[i], 4); \
+  temp.vec = s[2]; std::memcpy((uint8_t*)d + 8,  &temp.u32[i], 4); \
+  temp.vec = s[3]; std::memcpy((uint8_t*)d + 12, &temp.u32[i], 4); \
+  temp.vec = s[4]; std::memcpy((uint8_t*)d + 16, &temp.u32[i], 4); \
+} while(0)
 
 static void Initialize(__m512i* s) {
   alignas(64) static const uint32_t init[] = {
