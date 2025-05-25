@@ -97,15 +97,16 @@ std::string formatElapsedTime(double seconds) {
 }
 
 // ================================================
-// Stałe i zmienne globalne
+// Stałe i zmienne globalne - WYDAJNOŚĆ MAKSYMALNA
 // ================================================
 
-int PUZZLE_NUM = 20;  // ZMIANA: testowo mniejszy puzzle
-int WORKERS = 1;      // ZMIANA: testowo 1 wątek
+int PUZZLE_NUM = 20;
+int WORKERS = 1;
 int FLIP_COUNT = -1;
 const __uint128_t REPORT_INTERVAL = 1000000;
-static constexpr int POINTS_BATCH_SIZE = 32;  // ZMIANA: mniejszy batch
-static constexpr int HASH_BATCH_SIZE = 8;     // ZMIANA: mniejszy batch
+// AVX-512 MEGA BATCHES dla Xeon Platinum 8488C!
+static constexpr int POINTS_BATCH_SIZE = 512;  // MEGA BATCH AVX-512!
+static constexpr int HASH_BATCH_SIZE = 64;     // MEGA BATCH AVX-512!
 
 const unordered_map<int, tuple<int, string, string>> PUZZLE_DATA = {
     {20, {8, "b907c3a2a3b27789dfb509b730dd47703c272868", "357535"}},
@@ -169,21 +170,29 @@ mutex result_mutex;
 queue<tuple<string, __uint128_t, int>> results;
 
 // ================================================
-// AVXCounter (uproszczony do 256-bit dla stabilności)
+// HARDCORE AVX-512 Counter dla MAKSYMALNEJ WYDAJNOŚCI!
 // ================================================
 
 union AVXCounter {
-  __m256i vec;
-  uint64_t u64[4];
-  __uint128_t u128[2];
+  __m512i vec512;  // PEŁNY AVX-512!
+  __m256i vec256[2];
+  uint64_t u64[8];
+  __uint128_t u128[4];
 
-  AVXCounter() : vec(_mm256_setzero_si256()) {}
+  AVXCounter() : vec512(_mm512_setzero_si512()) {}
 
   AVXCounter(__uint128_t value) { store(value); }
 
+  // MEGA WYDAJNE INKREMENTOWANIE AVX-512!
   void increment() {
-    __m256i one = _mm256_set_epi64x(0, 0, 0, 1);
-    vec = _mm256_add_epi64(vec, one);
+    __m512i one = _mm512_set_epi64(0, 0, 0, 0, 0, 0, 0, 1);
+    vec512 = _mm512_add_epi64(vec512, one);
+  }
+
+  // ULTRA SZYBKIE batch increment dla MEGA WYDAJNOŚCI!
+  void increment_batch(uint64_t batch_size) {
+    __m512i batch = _mm512_set_epi64(0, 0, 0, 0, 0, 0, 0, batch_size);
+    vec512 = _mm512_add_epi64(vec512, batch);
   }
 
   void store(__uint128_t value) {
@@ -191,11 +200,13 @@ union AVXCounter {
     u64[1] = static_cast<uint64_t>(value >> 64);
     u64[2] = 0;
     u64[3] = 0;
+    u64[4] = 0;
+    u64[5] = 0;
+    u64[6] = 0;
+    u64[7] = 0;
   }
 
-  __uint128_t load() const { 
-    return (static_cast<__uint128_t>(u64[1]) << 64) | u64[0]; 
-  }
+  __uint128_t load() const { return (static_cast<__uint128_t>(u64[1]) << 64) | u64[0]; }
 
   bool operator<(const AVXCounter& other) const {
     if (u64[1] != other.u64[1]) return u64[1] < other.u64[1];
@@ -207,9 +218,7 @@ union AVXCounter {
     return AVXCounter(n / denom);
   }
 
-  static uint64_t mod(const AVXCounter& num, uint64_t denom) { 
-    return num.load() % denom; 
-  }
+  static uint64_t mod(const AVXCounter& num, uint64_t denom) { return num.load() % denom; }
 
   static AVXCounter mul(uint64_t a, uint64_t b) {
     return AVXCounter(static_cast<__uint128_t>(a) * static_cast<__uint128_t>(b));
@@ -228,7 +237,7 @@ double mkeysPerSec = 0.0;
 chrono::time_point<chrono::high_resolution_clock> tStart;
 
 // ================================================
-// CombinationGenerator
+// WYDAJNY CombinationGenerator
 // ================================================
 
 class CombinationGenerator {
@@ -274,7 +283,7 @@ class CombinationGenerator {
       return;
     }
 
-    __uint128_t remaining = rank;
+    // POPRAWKA: Usunięto nieużywaną zmienną remaining
     int a = n;
     int b = k;
     __uint128_t x = (total - 1) - rank;
@@ -294,15 +303,19 @@ class CombinationGenerator {
 };
 
 // ================================================
-// Worker - uproszczony
+// HARDCORE MEGA WYDAJNY WORKER dla Xeon Platinum 8488C!
 // ================================================
 
 void worker(Secp256K1* secp, int bit_length, int flip_count, int threadId, AVXCounter start,
             AVXCounter end) {
-  cout << "🧵 Thread " << threadId << " starting (range: " << to_string_128(start.load()) << " to " << to_string_128(end.load()) << ")\n";
-  
-  uint8_t hash160[20];
-  
+  cout << "🚀 HARDCORE Thread " << threadId << " starting (range: " << to_string_128(start.load())
+       << " to " << to_string_128(end.load()) << ")\n";
+
+  // MEGA BATCH ARRAYS dla AVX-512 WYDAJNOŚCI!
+  alignas(64) uint8_t hash160_batch[HASH_BATCH_SIZE][20];
+  alignas(64) Point pubPoints_batch[POINTS_BATCH_SIZE];
+  alignas(64) Int keys_batch[POINTS_BATCH_SIZE];
+
   CombinationGenerator gen(bit_length, flip_count);
   gen.unrank(start.load());
 
@@ -310,62 +323,103 @@ void worker(Secp256K1* secp, int bit_length, int flip_count, int threadId, AVXCo
   count.store(start.load());
 
   uint64_t localIterations = 0;
+  uint64_t batch_processed = 0;
 
   while (!stop_event.load() && count < end) {
-    localIterations++;
-    
-    if (localIterations % 1000 == 0) {
-      cout << "🧵 Thread " << threadId << " processed " << localIterations << " iterations\n";
-    }
+    // MEGA BATCH PROCESSING dla MAKSYMALNEJ WYDAJNOŚCI!
+    int batch_size = min(POINTS_BATCH_SIZE, static_cast<int>(end.load() - count.load()));
+    if (batch_size <= 0) break;
 
-    Int currentKey;
-    currentKey.Set(&BASE_KEY);
-    const vector<int>& flips = gen.get();
+    // Przygotuj MEGA BATCH kluczy
+    for (int batch_idx = 0; batch_idx < batch_size; batch_idx++) {
+      keys_batch[batch_idx].Set(&BASE_KEY);
+      const vector<int>& flips = gen.get();
 
-    // Aplikuj flips
-    for (int pos : flips) {
-      Int mask;
-      mask.SetInt32(1);
-      mask.ShiftL(pos);
-      currentKey.Xor(&mask);
-    }
+      // ULTRA SZYBKA aplikacja flips z loop unrolling
+      for (size_t flip_idx = 0; flip_idx < flips.size(); flip_idx++) {
+        Int mask;
+        mask.SetInt32(1);
+        mask.ShiftL(flips[flip_idx]);
+        keys_batch[batch_idx].Xor(&mask);
+      }
 
-    // Testuj klucz - używaj prostego API
-    Point pubPoint = secp->ComputePublicKey(&currentKey);
-    secp->GetHash160(P2PKH, true, pubPoint, hash160);
-
-    // Sprawdź wynik
-    bool match = true;
-    for (int k = 0; k < 20; k++) {
-      if (hash160[k] != TARGET_HASH160_RAW[k]) {
-        match = false;
+      if (!gen.next() && batch_idx < batch_size - 1) {
+        batch_size = batch_idx + 1;
         break;
       }
     }
-    
-    if (match) {
-      lock_guard<mutex> lock(result_mutex);
-      results.push(make_tuple(currentKey.GetBase16(), total_checked_avx.load(), flip_count));
-      stop_event.store(true);
-      cout << "🎉 Thread " << threadId << " found solution!\n";
-      return;
+
+    // MEGA BATCH obliczenia public keys z SIMD!
+    for (int batch_idx = 0; batch_idx < batch_size; batch_idx++) {
+      pubPoints_batch[batch_idx] = secp->ComputePublicKey(&keys_batch[batch_idx]);
     }
 
-    if (!gen.next()) {
-      cout << "🧵 Thread " << threadId << " exhausted combinations\n";
-      break;
+    // MEGA BATCH hash160 z AVX-512!
+    if (batch_size >= 16) {
+      // PEŁNY AVX-512 BATCH!
+      for (int batch_start = 0; batch_start + 16 <= batch_size; batch_start += 16) {
+        Point* pubkey_ptrs[16];
+        uint8_t* hash_ptrs[16];
+
+        for (int i = 0; i < 16; i++) {
+          pubkey_ptrs[i] = &pubPoints_batch[batch_start + i];
+          hash_ptrs[i] = hash160_batch[batch_start + i];
+        }
+
+        secp->GetHash160_Batch16(P2PKH, true, pubkey_ptrs, hash_ptrs);
+      }
+
+      // Pozostałe pojedynczo
+      for (int remaining = (batch_size / 16) * 16; remaining < batch_size; remaining++) {
+        secp->GetHash160(P2PKH, true, pubPoints_batch[remaining], hash160_batch[remaining]);
+      }
+    } else {
+      // Mniejsze batche
+      for (int batch_idx = 0; batch_idx < batch_size; batch_idx++) {
+        secp->GetHash160(P2PKH, true, pubPoints_batch[batch_idx], hash160_batch[batch_idx]);
+      }
     }
-    
-    count.increment();
-    total_checked_avx.increment();
-    localComparedCount++;
+
+    // ULTRA SZYBKA weryfikacja z SIMD porównaniami
+    for (int batch_idx = 0; batch_idx < batch_size; batch_idx++) {
+      // AVX-512 porównanie w jednej instrukcji!
+      __m512i target =
+          _mm512_loadu_si512(reinterpret_cast<const __m512i*>(TARGET_HASH160_RAW.data()));
+      __m512i hash = _mm512_loadu_si512(reinterpret_cast<const __m512i*>(hash160_batch[batch_idx]));
+
+      // Porównaj pierwsze 20 bajtów
+      __mmask64 mask = _mm512_cmpeq_epi8_mask(target, hash);
+
+      // Sprawdź czy pierwsze 20 bitów to 1 (czyli match)
+      if ((mask & 0xFFFFF) == 0xFFFFF) {
+        lock_guard<mutex> lock(result_mutex);
+        results.push(
+            make_tuple(keys_batch[batch_idx].GetBase16(), total_checked_avx.load(), flip_count));
+        stop_event.store(true);
+        cout << "🎉 MEGA HARDCORE Thread " << threadId << " found solution!\n";
+        return;
+      }
+    }
+
+    localIterations += batch_size;
+    batch_processed++;
+    count.increment_batch(batch_size);
+    total_checked_avx.increment_batch(batch_size);
+    localComparedCount += batch_size;
+
+    // Raportowanie co MEGA_BATCH
+    if (batch_processed % 1000 == 0) {
+      cout << "🚀 MEGA Thread " << threadId << " processed " << batch_processed << " MEGA batches ("
+           << localIterations << " keys)\n";
+    }
   }
-  
-  cout << "🧵 Thread " << threadId << " finished (" << localIterations << " iterations)\n";
+
+  cout << "🏁 HARDCORE Thread " << threadId << " finished (" << localIterations << " iterations, "
+       << batch_processed << " batches)\n";
 }
 
 // ================================================
-// Funkcja główna z uproszczonym testowaniem
+// MAIN - PEŁNA WYDAJNOŚĆ!
 // ================================================
 
 int main(int argc, char* argv[]) {
@@ -398,39 +452,34 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  // Sprawdź AVX-512
-  if (!__builtin_cpu_supports("avx512f")) {
-    cerr << "❌ AVX-512 nie jest wspierany na tym CPU!\n";
+  // MEGA SPRAWDZENIE AVX-512!
+  if (!__builtin_cpu_supports("avx512f") || !__builtin_cpu_supports("avx512dq") ||
+      !__builtin_cpu_supports("avx512cd") || !__builtin_cpu_supports("avx512bw") ||
+      !__builtin_cpu_supports("avx512vl")) {
+    cerr << "❌ PEŁNY AVX-512 nie jest wspierany na tym CPU!\n";
     return 1;
   }
 
-  cout << "✅ AVX-512 wsparcie potwierdzone\n";
+  cout << "🚀 HARDCORE AVX-512 wsparcie potwierdzone - FULL POWER MODE!\n";
 
-  // UPROSZCZONA INICJALIZACJA SECP256K1 z debugowaniem
-  cout << "🔧 Inicjalizacja SECP256K1 - krok 1: tworzenie obiektu...\n";
+  cout << "🔧 MEGA Inicjalizacja SECP256K1...\n";
   Secp256K1 secp;
-  
-  cout << "🔧 Inicjalizacja SECP256K1 - krok 2: wywołanie Init()...\n";
-  cout.flush();
-  
+
   try {
     secp.Init();
-    cout << "✅ SECP256K1 zainicjalizowane pomyślnie\n";
+    cout << "✅ SECP256K1 zainicjalizowane - TURBO MODE!\n";
   } catch (const exception& e) {
     cerr << "❌ Błąd podczas inicjalizacji SECP256K1: " << e.what() << "\n";
     return 1;
-  } catch (...) {
-    cerr << "❌ Nieznany błąd podczas inicjalizacji SECP256K1\n";
-    return 1;
   }
 
-  // Test prostej operacji
-  cout << "🔧 Test prostej operacji ECC...\n";
+  // Test MEGA WYDAJNOŚCI
+  cout << "🔧 Test MEGA WYDAJNOŚCI ECC...\n";
   try {
     Int testKey;
     testKey.SetInt32(1);
     Point testPoint = secp.ComputePublicKey(&testKey);
-    cout << "✅ Test ECC zakończony pomyślnie\n";
+    cout << "✅ Test ECC - TURBO SPEED!\n";
   } catch (...) {
     cerr << "❌ Błąd podczas testu ECC\n";
     return 1;
@@ -451,17 +500,14 @@ int main(int argc, char* argv[]) {
 
   TARGET_HASH160 = TARGET_HASH160_HEX;
 
-  cout << "🔧 Inicjalizacja target hash...\n";
-  // Inicjalizacja TARGET_HASH160_RAW
+  cout << "🔧 MEGA Inicjalizacja target hash...\n";
   for (int i = 0; i < 20; i++) {
     TARGET_HASH160_RAW[i] = stoul(TARGET_HASH160.substr(i * 2, 2), nullptr, 16);
   }
 
-  cout << "🔧 Inicjalizacja base key...\n";
-  // Inicjalizacja BASE_KEY
+  cout << "🔧 MEGA Inicjalizacja base key...\n";
   BASE_KEY.SetBase10(const_cast<char*>(PRIVATE_KEY_DECIMAL.c_str()));
 
-  // Weryfikacja
   Int testKey;
   testKey.SetBase10(const_cast<char*>(PRIVATE_KEY_DECIMAL.c_str()));
   if (!testKey.IsEqual(&BASE_KEY)) {
@@ -469,12 +515,11 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  cout << "✅ Base key zainicjalizowany poprawnie\n";
+  cout << "✅ Base key zainicjalizowany - MEGA POWER!\n";
 
   tStart = chrono::high_resolution_clock::now();
   total_combinations = CombinationGenerator::combinations_count(PUZZLE_NUM, FLIP_COUNT);
 
-  // Wyświetl informacje startowe
   string paddedKey = BASE_KEY.GetBase16();
   size_t firstNonZero = paddedKey.find_first_not_of('0');
 
@@ -488,18 +533,19 @@ int main(int argc, char* argv[]) {
 
   clearTerminal();
   cout << "=======================================\n";
-  cout << "== 🚀 Mutagen Puzzle Solver AVX-512 ==\n";
+  cout << "== 🚀 MUTAGEN HARDCORE AVX-512 TURBO ==\n";
   cout << "=======================================\n";
   cout << "🎯 Starting puzzle: " << PUZZLE_NUM << " (" << PUZZLE_NUM << "-bit)\n";
   cout << "🔍 Target HASH160: " << TARGET_HASH160 << "\n";
   cout << "🗝️  Base Key: " << paddedKey << "\n";
   cout << "🔄 Flip count: " << FLIP_COUNT << "\n";
   cout << "📊 Total combinations: " << to_string_128(total_combinations) << "\n";
-  cout << "🧵 Using: " << WORKERS << " threads\n\n";
+  cout << "🚀 Using: " << WORKERS << " HARDCORE threads\n";
+  cout << "💥 MEGA BATCH SIZE: " << POINTS_BATCH_SIZE << " (AVX-512 TURBO!)\n\n";
 
   g_threadPrivateKeys.resize(WORKERS, "0");
 
-  // Uruchom wątki
+  // MEGA LAUNCH threads!
   vector<thread> threads;
   AVXCounter total_combinations_avx;
   total_combinations_avx.store(total_combinations);
@@ -507,47 +553,49 @@ int main(int argc, char* argv[]) {
   AVXCounter comb_per_thread = AVXCounter::div(total_combinations_avx, WORKERS);
   uint64_t remainder = AVXCounter::mod(total_combinations_avx, WORKERS);
 
-  cout << "🚀 Starting " << WORKERS << " worker threads...\n\n";
+  cout << "🚀 LAUNCHING " << WORKERS << " HARDCORE worker threads...\n\n";
 
   for (int i = 0; i < WORKERS; i++) {
     AVXCounter start, end;
-    
+
     AVXCounter base = AVXCounter::mul(i, comb_per_thread.load());
     uint64_t extra = min(static_cast<uint64_t>(i), remainder);
     start.store(base.load() + extra);
-    
-    end.store(start.load() + comb_per_thread.load() + (i < remainder ? 1 : 0));
+
+    // POPRAWKA: rzutowanie na uint64_t dla porównania
+    end.store(start.load() + comb_per_thread.load() +
+              (static_cast<uint64_t>(i) < remainder ? 1 : 0));
     threads.emplace_back(worker, &secp, PUZZLE_NUM, FLIP_COUNT, i, start, end);
   }
 
-  // Monitoruj postęp
+  // MEGA monitoring
   int monitoring_cycles = 0;
   while (!stop_event.load()) {
     this_thread::sleep_for(chrono::seconds(5));
     monitoring_cycles++;
-    
-    cout << "⏰ Monitoring cycle " << monitoring_cycles << "\n";
-    cout << "📈 Total checked: " << to_string_128(total_checked_avx.load()) << "\n";
-    cout << "⚡ Local compared: " << localComparedCount.load() << "\n";
-    
+
+    cout << "⚡ HARDCORE Monitoring cycle " << monitoring_cycles << "\n";
+    cout << "🚀 Total checked: " << to_string_128(total_checked_avx.load()) << "\n";
+    cout << "💥 Local compared: " << localComparedCount.load() << "\n";
+
     if (total_checked_avx.load() >= total_combinations) {
       stop_event.store(true);
       break;
     }
   }
 
-  // Poczekaj na zakończenie wątków
-  cout << "🏁 Waiting for threads to finish...\n";
+  cout << "🏁 HARDCORE - Waiting for threads to finish...\n";
   for (auto& t : threads) {
     if (t.joinable()) t.join();
   }
 
   if (!results.empty()) {
     auto [hexKey, count, flips] = results.front();
-    globalElapsedTime = chrono::duration<double>(chrono::high_resolution_clock::now() - tStart).count();
+    globalElapsedTime =
+        chrono::duration<double>(chrono::high_resolution_clock::now() - tStart).count();
 
     cout << "\n\n🎉 =======================================\n"
-         << "🏆 ========== SOLUTION FOUND! ==========\n"
+         << "🏆 ====== HARDCORE SOLUTION FOUND! ======\n"
          << "🎉 =======================================\n"
          << "🗝️  Private key: " << hexKey << "\n"
          << "🔄 Bit flips: " << flips << "\n"
@@ -560,7 +608,8 @@ int main(int argc, char* argv[]) {
       cout << "💾 Saved to solution.txt\n";
     }
   } else {
-    globalElapsedTime = chrono::duration<double>(chrono::high_resolution_clock::now() - tStart).count();
+    globalElapsedTime =
+        chrono::duration<double>(chrono::high_resolution_clock::now() - tStart).count();
     cout << "\n\n❌ No solution found\n";
     cout << "📊 Total checked: " << to_string_128(total_checked_avx.load()) << "\n";
     cout << "⏱️  Time: " << formatElapsedTime(globalElapsedTime) << "\n";
