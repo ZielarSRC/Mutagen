@@ -69,7 +69,7 @@ void Secp256K1::Init() {
     N.Reduce();
     GTable[i * 256 + 255] = N;
   }
-
+}
   // --------- AVX-512 batch hash160 helpers ---------
 
   void Secp256K1::GetHash160_Batch16(int type, bool compressed, Point* pubkeys[16],
