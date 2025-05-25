@@ -55,68 +55,18 @@ void Secp256K1::Init() {
     const int TIMEOUT_SECONDS = 60;
     
     // Compute Generator table
-    Point N(G);
-    for(int i = 0; i < 32; i++) {
-        // Check timeout
-        auto current_time = std::chrono::high_resolution_clock::now();
-        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(current_time - start_time).count();
-        
-        if (elapsed > TIMEOUT_SECONDS) {
-            std::cerr << "❌ TIMEOUT podczas generowania tabeli na iteracji " << i << std::endl;
-            exit(1);
-        }
-        
-        std::cout << "🔧 Iteracja " << i << " - rozpoczęcie" << std::endl;
-        
-        if (i % 8 == 0) {
-            std::cout << "🔧 Generowanie tabeli: " << (i * 100 / 32) << "% (" << i << "/32)" << std::endl;
-        }
-        
-        try {
-            GTable[i * 256] = N;
-            std::cout << "🔧 Iteracja " << i << " - przed DoubleDirect" << std::endl;
-            std::cout.flush();
-            
-            // POPRAWKA: użyj DoubleDirect zamiast DoubleDirect_Safe!
-            N = DoubleDirect(N);
-            
-            std::cout << "🔧 Iteracja " << i << " - po DoubleDirect, rozpoczynanie pętli wewnętrznej" << std::endl;
-            std::cout.flush();
-            
-            for (int j = 1; j < 255; j++) {
-                if (j % 50 == 0) {
-                    std::cout << "🔧 Iteracja " << i << ", j=" << j << "/254" << std::endl;
-                    std::cout.flush();
-                }
-                
-                if (j % 100 == 0) {
-                    auto inner_time = std::chrono::high_resolution_clock::now();
-                    auto inner_elapsed = std::chrono::duration_cast<std::chrono::seconds>(inner_time - start_time).count();
-                    
-                    if (inner_elapsed > TIMEOUT_SECONDS) {
-                        std::cerr << "❌ TIMEOUT w pętli wewnętrznej na i=" << i << ", j=" << j << std::endl;
-                        exit(1);
-                    }
-                }
-                
-                GTable[i * 256 + j] = N;
-                N = AddDirect(N, GTable[i * 256]);
-            }
-            
-            GTable[i * 256 + 255] = N;
-            std::cout << "🔧 Iteracja " << i << " - zakończona pomyślnie" << std::endl;
-            std::cout.flush();
-            
-        } catch (const std::exception& e) {
-            std::cerr << "❌ Wyjątek na iteracji " << i << ": " << e.what() << std::endl;
-            exit(1);
-        } catch (...) {
-            std::cerr << "❌ Nieznany wyjątek na iteracji " << i << std::endl;
-            exit(1);
-        }
+   Point N(G);
+for (int i = 0; i < 32; i++) {
+    N.Reduce();
+    GTable[i * 256] = N;
+    N = DoubleDirect(N);
+    for (int j = 1; j < 255; j++) {
+        N.Reduce();
+        GTable[i * 256 + j] = N;
+        N = AddDirect(N, GTable[i * 256]);
     }
-    
-    std::cout << "✅ Inicjalizacja SECP256K1 zakończona pomyślnie!" << std::endl;
+    N.Reduce();
+    GTable[i * 256 + 255] = N;
 }
 
 // --------- AVX-512 batch hash160 helpers ---------
