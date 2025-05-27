@@ -1,20 +1,26 @@
 #ifndef INTGROUPH
 #define INTGROUPH
 
+#include <immintrin.h>
+
+#include <vector>
+
 #include "Int.h"
 
 class IntGroup {
  public:
   IntGroup(int size);
   ~IntGroup();
-
-  void Set(Int *pts);
-  __attribute__((target("avx512f"))) void ModInv();  // AVX-512 batch inversion
+  void Set(Int* a);
+  void ModInv();
+  Int Get(Int* a);
+  void InitP();
 
  private:
-  Int *ints;
-  Int *subp;
   int size;
+  bool initialized;
+  Int* table;
+  Int P;
 };
 
 #endif  // INTGROUPH
