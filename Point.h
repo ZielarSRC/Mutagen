@@ -1,30 +1,38 @@
-#ifndef POINT_H
-#define POINT_H
+#ifndef POINTH
+#define POINTH
 
 #include "Int.h"
 
 class Point {
  public:
-  Int x, y, z;
-
   Point();
   Point(const Point &p);
   Point(Int *cx, Int *cy, Int *cz);
-  Point(Int *cx, Int *cz);
-  ~Point();
+  Point(Int *cx, Int *cy);
 
-  bool IsZero();
-  bool IsEqual(Point &p);
-  void Set(Point &p);
-  void Set(Int *cx, Int *cy, Int *cz);
   void Clear();
-  void Reduce();
+  void Set(Int *x, Int *y);
+  void Set(Int *x, Int *y, Int *z);
+  void Set(Point &p);
+  bool IsZero();
+  bool Equal(Point &p);
+  Point &operator=(const Point &p);
+  Point Neg();
 
-  // Assignment operator
-  Point &operator=(const Point &other);
+  // ECDSA
+  bool EC(Int &n);
 
-  // AVX-512 optimizations
-  friend class Secp256K1;
+  // Point operations
+  Point DoubleDirect();
+  void Normalize();
+  Point Neg();
+
+  // Initialize with generator parameters
+  void Init(Int *p, Int *s);
+
+  Int x;
+  Int y;
+  Int z;
 };
 
-#endif  // POINT_H
+#endif  // POINTH
