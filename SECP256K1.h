@@ -1,14 +1,15 @@
 #ifndef SECP256K1H
 #define SECP256K1H
 
+#include <immintrin.h>  // Dla instrukcji AVX-512
+#include <omp.h>        // Dla obsługi wielowątkowości
+
 #include <string>
 #include <vector>
 
-#include "Int.h"
-#include "IntGroup.h"
 #include "Point.h"
 
-// Address types
+// Address type
 #define P2PKH 0
 #define P2SH 1
 #define BECH32 2
@@ -19,55 +20,76 @@ class Secp256K1 {
   ~Secp256K1();
   void Init();
   Point ComputePublicKey(Int *privKey);
-  Point AddDirect(Point &p1, Point &p2);
-  Point Add(Point &p1, Point &p2);
-  Point Add2(Point &p1, Point &p2);
-  Point Double(Point &p);
-  void GetHash160(int type, bool compressed, Point &pubKey, unsigned char *hash);
-  void GetHash160_Batch16(int type, bool compressed, Point **pubKey, uint8_t **hash);
-  std::string GetPrivAddress(bool compressed, Int &privKey);
-  std::string GetPublicKeyHex(bool compressed, Point &pubKey);
   Point NextKey(Point &key);
+  void Check();
   bool EC(Point &p);
-  Point ScalarMultiplication(Point &p, Int &n);
-  Point ScalarMultiplication(Int &n);
+  Int GetY(Int x, bool isEven);
 
-  // Batch operations
-  void BatchNormalize(Point *points, int count);
+  // Standardowe funkcje hash i adresowe
+  void GetHash160(int type, bool compressed, Point &k0, Point &k1, Point &k2, Point &k3,
+                  uint8_t *h0, uint8_t *h1, uint8_t *h2, uint8_t *h3);
 
-  // Address handling
+  void GetHash160(int type, bool compressed, Point &pubKey, unsigned char *hash);
+
+  std::string GetAddress(int type, bool compressed, Point &pubKey);
   std::string GetAddress(int type, bool compressed, unsigned char *hash160);
-  std::string GetPrivAddressAuto(Int &privKey);
+  std::vector<std::string> GetAddress(int type, bool compressed, unsigned char *h1,
+                                      unsigned char *h2, unsigned char *h3, unsigned char *h4);
+  std::string GetPrivAddress(bool compressed, Int &privKey);
+  std::string GetPublicKeyHex(bool compressed, Point &p);
+  Point ParsePublicKeyHex(std::string str, bool &isCompressed);
+
   bool CheckPudAddress(std::string address);
 
-  // Base58 encoding/decoding functions
-  char *Base58(unsigned char *data, int length, char *result);
-  bool DecodeBase58(const char *input, unsigned char *output, size_t *outputLen);
-  static bool GetPrivAddr(std::string addr, uint8_t *data, int size);
+  static Int DecodePrivateKey(char *key, bool *compressed);
 
-  // Utility functions
-  static bool IsCompressedAddress(std::string address);
-  static bool IsCompressedSpark(std::string address);
-  static bool IsCompressedPublic(int type);
+  // Podstawowe operacje na krzywej eliptycznej
+  Point Add(Point &p1, Point &p2);
+  Point Add2(Point &p1, Point &p2);
+  Point AddDirect(Point &p1, Point &p2);
+  Point Double(Point &p);
+  Point DoubleDirect(Point &p);
 
-  // Public curve parameters
-  Int P;    // Prime for the finite field
-  Int N;    // Curve order
-  Int B;    // Curve parameter
-  Point G;  // Generator point
-  Int _a;   // a coefficient (0 for secp256k1)
+  // Nowe metody zoptymalizowane dla Intel Xeon Platinum 8488C
+
+  // Funkcja do wsadowego przetwarzania punktów z wykorzystaniem AVX-512
+  void BatchProcessPoints(Point *points, int numPoints, Point *results);
+
+  // Funkcja do równoległego obliczania wielu kluczy publicznych
+  void BatchComputePublicKeys(Int *privKeys, int numKeys, Point *pubKeys);
+
+  // Zoptymalizowana funkcja normalizacji wsadowej dla punktów
+  void BatchNormalize(Point *points, int count);
+
+  // Zoptymalizowana wersja GetHash160 dla jednoczesnego przetwarzania 16 punktów
+  void GetHash160_AVX512(int type, bool compressed, Point **pubKeys, uint8_t **hashes, int count);
+
+  // Funkcja do wsadowego podwajania wielu punktów
+  void BatchDouble(Point *points, int count, Point *results);
+
+  // Funkcja do wsadowego dodawania punktów
+  void BatchAdd(Point *points1, Point *points2, int count, Point *results);
+
+  Point G;    // Generator
+  Int order;  // Curve order
 
  private:
-  Int _Gx;  // Generator x coordinate
-  Int _Gy;  // Generator y coordinate
+  uint8_t GetByte(std::string &str, int idx);
+
+  // Ustawienie optymalnej liczby wątków dla procesora
+  void ConfigureThreads();
+
+  // Prefetching danych dla lepszego wykorzystania pamięci podręcznej
+  void PrefetchPoint(const Point *p, int hint = _MM_HINT_T0);
+
+  // Wykonanie instrukcji AVX-512 VNNI dla przyspieszenia obliczeń
+  void VnniAccelerate(Int *data, int count);
+
+  Point GTable[256 * 32];  // Generator table
 };
 
-// Hash functions
-void SHA256(unsigned char *data, int len, unsigned char *hash);
-void RIPEMD160(unsigned char *data, int len, unsigned char *hash);
-
-// Optimized hash functions for AVX-512
-void sha256_avx512_16blocks(uint8_t **in, uint8_t **out);
-void ripemd160_avx512_16blocks(const uint8_t **in, uint8_t **out);
+// Globalne funkcje pomocnicze do przetwarzania równoległego
+void sha256_avx512_batch(uint8_t **inputs, int inputLen, uint8_t **outputs, int count);
+void ripemd160_avx512_batch(uint8_t **inputs, int inputLen, uint8_t **outputs, int count);
 
 #endif  // SECP256K1H
