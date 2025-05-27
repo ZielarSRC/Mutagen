@@ -25,7 +25,6 @@ class Point {
   // Point operations
   Point DoubleDirect();
   void Normalize();
-  Point Neg();
 
   // Initialize with generator parameters
   void Init(Int *p, Int *s);
