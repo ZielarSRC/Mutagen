@@ -294,7 +294,10 @@ void IntGroup::BatchInversionProcessRange(int start, int end) {
         }
         Int div;
         div.Set(&subp[i - 1]);
-        div.ModMulK1(&prevSubp.ModInv());
+        // Create a temporary variable to hold the result
+        Int temp;
+        prevSubp.ModInv(&temp);  // Or if ModInv now takes no parameters: temp = prevSubp; temp.ModInv();
+        div.ModMulK1(&temp);
         ints[i].ModMulK1(&div);
       } else if (i == start) {
         if (start == 0) {
@@ -359,14 +362,14 @@ void IntGroup::SetElement(int idx, Int* val) {
 // Prefetching dla lepszej wydajności pamięci podręcznej
 void IntGroup::PrefetchAll(int hint) {
   for (int i = 0; i < size; i++) {
-    _mm_prefetch((const char*)&ints[i], hint);
+    _mm_prefetch((const char*)&ints[i], (_mm_hint)hint);
   }
 }
 
 // Prefetching dla zakresu elementów
 void IntGroup::PrefetchRange(int start, int end, int hint) {
   for (int i = start; i < end && i < size; i++) {
-    _mm_prefetch((const char*)&ints[i], hint);
+    _mm_prefetch((const char*)&ints[i], (_mm_hint)hint);
   }
 }
 
