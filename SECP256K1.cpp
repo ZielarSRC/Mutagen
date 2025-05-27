@@ -1,3 +1,4 @@
+#include <immintrin.h>
 #include <math.h>
 #include <string.h>
 
@@ -5,157 +6,55 @@
 #include <iostream>
 
 #include "SECP256K1.h"
-#include "ripemd160_avx512.h"
-#include "sha256_avx512.h"
 
 using namespace std;
 
 Secp256K1::Secp256K1() {}
 
+Secp256K1::~Secp256K1() {}
+
 void Secp256K1::Init() {
   // Prime for the finite field
-  _p.SetBase16("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F");
+  P.SetBase16("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F");
 
   // Order of the group
-  _s.SetBase16("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141");
+  N.SetBase16("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141");
 
-  // Half order of the group
-  //_halfS.SetBase16("7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0");
-
-  _a.SetInt32(0);
-  _b.SetInt32(7);
+  // Curve parameters
+  _a.SetInt32(0);  // a coefficient (0 for secp256k1)
+  B.SetInt32(7);   // b coefficient (7 for secp256k1)
 
   // Base point (generator)
   _Gx.SetBase16("79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798");
   _Gy.SetBase16("483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8");
 
-  // Compute generator table
-  Point G(_Gx, _Gy);
-  G.Init(&_p, &_s);
+  // Initialize generator point
+  G.x.Set(&_Gx);
+  G.y.Set(&_Gy);
+  G.z.SetInt32(1);
+}
 
-  _groupBSize = 256;
-  _groupSize = pow(2, _groupBSize);
+Point Secp256K1::ComputePublicKey(Int *privKey) {
+  Int privateKey;
+  privateKey.Set(privKey);
+  privateKey.Mod(&N);
 
-  // Compute Generator table
-  Point g = G;
-  G.Set(g);
-  _g[0] = g;
-  g = g.DoubleDirect();
-  G.Set(g);
-  _g[1] = g;
-  for (int i = 2; i < 32; i++) {
-    g = g.DoubleDirect();
-    G.Set(g);
-    _g[i] = g;
+  if (privateKey.IsZero()) {
+    Point p;
+    p.Clear();
+    return p;
   }
 
-  // For Endomorphism
-  // _beta.SetBase16("7AE96A2B657C07106E64479EAC3434E99CF0497512F58995C1396C28719501EE");
-  // _lambda.SetBase16("5363AD4CC05C30E0A5261C028812645A122E22EA20816678DF02967C1B23BD72");
-
-  _two.SetInt32(2);
-  _two = _two.ModInv(&_s);
+  // Compute public key using scalar multiplication
+  return ScalarMultiplication(privateKey);
 }
 
-Secp256K1::~Secp256K1() {}
+Point Secp256K1::NextKey(Point &key) { return Add(key, G); }
 
-Point Secp256K1::ComputePublicKey(Int* privKey) {
-  int i = 0;
-  uint8_t b;
-  Point Q;
-  Int P;
-  P.Set(privKey);
-  P.Mod(&_s);
+Point Secp256K1::AddDirect(Point &p1, Point &p2) {
+  if (p1.IsZero()) return p2;
+  if (p2.IsZero()) return p1;
 
-  // Search first significant byte
-  for (i = 0; i < 32; i++) {
-    b = P.GetByte(i);
-    if (b) break;
-  }
-  if (i == 32) {
-    // Null private key, Neutral element
-    Q.Clear();
-    Q.z.SetInt32(1);
-    return Q;
-  }
-
-  // Compute pub key
-  int bLength = (256 - i * 8);
-  Q = DoubleAndAdd(&_g[0], P, i, bLength);
-
-  Q.Normalize();
-  return Q;
-}
-
-Point Secp256K1::NextKey(Point& key) {
-  // Input key must be normalized
-  Point r = AddDirect(key, _g[0]);
-  r.Normalize();
-  return r;
-}
-
-// P = k*A
-Point Secp256K1::ScalarMultiplication(Point& A, Int* k) {
-  Point R;
-  R.Clear();
-  R.z.SetInt32(1);
-  return DoubleAndAdd(&A, *k, 0, 256);
-}
-
-// P = k*G
-Point Secp256K1::ScalarMultiplication(Int* k) {
-  Point R;
-  R.Clear();
-  R.z.SetInt32(1);
-  return DoubleAndAdd(&_g[0], *k, 0, 256);
-}
-
-// Double and Add (fast) - Miller Rabin
-Point Secp256K1::DoubleAndAdd(Point* P, Int& n, int from, int length) {
-  Point R;
-  R.Clear();
-  R.z.SetInt32(1);
-  int i;
-  int naf_length;
-  signed char* naf = n.GetNAF(&naf_length, length);
-  int nbBit = naf_length;
-  for (i = nbBit - 1; i >= from; i--) {
-    R = R.DoubleDirect();
-    if (naf[i] > 0) {
-      R = AddDirect(R, P[0]);
-    } else if (naf[i] < 0) {
-      Point& ng = P[0].Neg();
-      R = AddDirect(R, ng);
-    }
-  }
-  free(naf);
-  return R;
-}
-
-void Secp256K1::GetPublicKeyHex(bool compressed, Point& pubKey, char* dst) {
-  unsigned char publicKeyBytes[128];
-
-  if (!compressed) {
-    // Full public key
-    publicKeyBytes[0] = 0x4;
-    pubKey.x.Get32Bytes(publicKeyBytes + 1);
-    pubKey.y.Get32Bytes(publicKeyBytes + 33);
-    printf("PubKeyHex: %s\n", publicKeyBytes);
-
-    // To Hex
-    for (int i = 0; i < 65; i++) sprintf(dst + 2 * i, "%02X", (int)publicKeyBytes[i]);
-
-  } else {
-    // Compressed public key
-    publicKeyBytes[0] = pubKey.y.IsEven() ? 0x2 : 0x3;
-    pubKey.x.Get32Bytes(publicKeyBytes + 1);
-
-    // To Hex
-    for (int i = 0; i < 33; i++) sprintf(dst + 2 * i, "%02X", (int)publicKeyBytes[i]);
-  }
-}
-
-Point Secp256K1::AddDirect(Point& p1, Point& p2) {
   Int u;
   Int v;
   Int u1;
@@ -194,7 +93,6 @@ Point Secp256K1::AddDirect(Point& p1, Point& p2) {
     // Z1=1
     u = u2;
     v = v2;
-
   } else {
     // U = U1 - U2
     u.ModSub(&u1, &u2);
@@ -203,7 +101,10 @@ Point Secp256K1::AddDirect(Point& p1, Point& p2) {
     v.ModSub(&v1, &v2);
   }
 
-  u1.ModNeg(&u);
+  u1.ModNeg();
+  u1.ModAdd(&u);
+  u1.ModNeg();
+
   u2.ModSub(&u1, &u);
   vs2.ModSquareK1(&v);
   vs3.ModMulK1(&vs2, &v);
@@ -229,7 +130,7 @@ Point Secp256K1::AddDirect(Point& p1, Point& p2) {
   return r;
 }
 
-Point Secp256K1::Add2(Point& p1, Point& p2) {
+Point Secp256K1::Add2(Point &p1, Point &p2) {
   // P1 must be different from P2
   // Normal addition
   Int dy;
@@ -257,7 +158,7 @@ Point Secp256K1::Add2(Point& p1, Point& p2) {
   return r;
 }
 
-Point Secp256K1::Add(Point& p1, Point& p2) {
+Point Secp256K1::Add(Point &p1, Point &p2) {
   if (p1.IsZero()) return p2;
   if (p2.IsZero()) return p1;
 
@@ -276,7 +177,7 @@ Point Secp256K1::Add(Point& p1, Point& p2) {
   return Add2(p1, p2);
 }
 
-Point Secp256K1::Double(Point& p) {
+Point Secp256K1::Double(Point &p) {
   // Doubling
   Int _s;
   Int _p;
@@ -305,20 +206,76 @@ Point Secp256K1::Double(Point& p) {
   return r;
 }
 
-bool Secp256K1::EC(Point& p) {
+bool Secp256K1::EC(Point &p) {
   Int _s;
   Int _p;
 
   _s.ModSquareK1(&p.y);
   _p.ModSquareK1(&p.x);
   _p.ModMulK1(&_p, &p.x);
-  _p.ModAdd(&_p, &_b);
+  _p.ModAdd(&_p, &B);
   _s.ModSub(&_s, &_p);
 
   return _s.IsZero();  // ( y^2 - (x^3 + 7) )
 }
 
-void Secp256K1::GetHash160(int type, bool compressed, Point& pubKey, unsigned char* hash) {
+Point Secp256K1::ScalarMultiplication(Point &p, Int &n) {
+  Point result;
+  result.Clear();
+  result.z.SetInt32(1);
+
+  Point temp = p;
+
+  for (int i = 0; i < 256; i++) {
+    if (n.GetBit(i)) result = Add(result, temp);
+    temp = Double(temp);
+  }
+
+  return result;
+}
+
+Point Secp256K1::ScalarMultiplication(Int &n) {
+  Point result;
+  result.Clear();
+  result.z.SetInt32(1);
+
+  Point temp = G;
+
+  for (int i = 0; i < 256; i++) {
+    if (n.GetBit(i)) result = Add(result, temp);
+    temp = Double(temp);
+  }
+
+  return result;
+}
+
+std::string Secp256K1::GetPublicKeyHex(bool compressed, Point &pubKey) {
+  unsigned char publicKeyBytes[128];
+  char hex[256];
+
+  if (!compressed) {
+    // Full public key
+    publicKeyBytes[0] = 0x4;
+    pubKey.x.Get32Bytes(publicKeyBytes + 1);
+    pubKey.y.Get32Bytes(publicKeyBytes + 33);
+
+    // To Hex
+    for (int i = 0; i < 65; i++) sprintf(hex + 2 * i, "%02X", (int)publicKeyBytes[i]);
+    hex[130] = '\0';
+  } else {
+    // Compressed public key
+    publicKeyBytes[0] = pubKey.y.IsEven() ? 0x2 : 0x3;
+    pubKey.x.Get32Bytes(publicKeyBytes + 1);
+
+    // To Hex
+    for (int i = 0; i < 33; i++) sprintf(hex + 2 * i, "%02X", (int)publicKeyBytes[i]);
+    hex[66] = '\0';
+  }
+
+  return std::string(hex);
+}
+
+void Secp256K1::GetHash160(int type, bool compressed, Point &pubKey, unsigned char *hash) {
   unsigned char publicKeyBytes[128];
   unsigned char hashBytes[64];
 
@@ -336,29 +293,13 @@ void Secp256K1::GetHash160(int type, bool compressed, Point& pubKey, unsigned ch
   RIPEMD160(hashBytes, 32, hash);
 }
 
-// Compute SHA-256 for 16 blocks in parallel using AVX-512
-void sha256_avx512_16blocks(uint8_t** in, uint8_t** out) {
-  for (int i = 0; i < 16; i++) {
-    SHA256(in[i], 32, out[i]);
-  }
-}
-
-// Compute RIPEMD-160 for 16 blocks in parallel using AVX-512
-void ripemd160_avx512_16blocks(const uint8_t** in, uint8_t** out) {
-  for (int i = 0; i < 16; i++) {
-    RIPEMD160(in[i], 32, out[i]);
-  }
-}
-
-void Secp256K1::GetHash160_Batch16(int type, bool compressed, Point** pubKey, uint8_t** hash) {
-  uint8_t* sha[16];
-  uint8_t* sha_in[16];
-  uint8_t* sha_out[16];
+void Secp256K1::GetHash160_Batch16(int type, bool compressed, Point **pubKey, uint8_t **hash) {
+  uint8_t *sha_in[16];
+  uint8_t *sha_out[16];
 
   for (int i = 0; i < 16; i++) {
-    sha[i] = (uint8_t*)malloc(32);
-    sha_in[i] = (uint8_t*)malloc(compressed ? 33 : 65);
-    sha_out[i] = (uint8_t*)malloc(32);
+    sha_in[i] = (uint8_t *)malloc(compressed ? 33 : 65);
+    sha_out[i] = (uint8_t *)malloc(32);
 
     // Create serialized public key
     if (!compressed) {
@@ -373,241 +314,269 @@ void Secp256K1::GetHash160_Batch16(int type, bool compressed, Point** pubKey, ui
 
   // Process all 16 blocks
   sha256_avx512_16blocks(sha_in, sha_out);
-  ripemd160_avx512_16blocks((const uint8_t**)sha_out, hash);
+  ripemd160_avx512_16blocks((const uint8_t **)sha_out, hash);
 
   // Free temporary memory
   for (int i = 0; i < 16; i++) {
-    free(sha[i]);
     free(sha_in[i]);
     free(sha_out[i]);
   }
 }
 
-std::string Secp256K1::GetAddress(int type, bool compressed, unsigned char* hash160) {
-  uint8_t* in[16];
-  uint8_t* out[16];
-
-  for (int i = 0; i < 16; i++) {
-    in[i] = (uint8_t*)malloc(32);
-    out[i] = (uint8_t*)malloc(32);
-  }
-
-  // Setup input for SHA-256
-  uint8_t tmp[25];
+std::string Secp256K1::GetAddress(int type, bool compressed, unsigned char *hash160) {
+  unsigned char address[25];
+  char b58[64];
 
   switch (type) {
     case P2PKH:
-      tmp[0] = 0x00;
+      address[0] = 0x00;
       break;
     case P2SH:
-      tmp[0] = 0x05;
+      address[0] = 0x05;
       break;
     default:
-      tmp[0] = 0x00;
+      address[0] = 0x00;
   }
 
-  memcpy(tmp + 1, hash160, 20);
+  memcpy(address + 1, hash160, 20);
 
-  // Calculate checksum using SHA-256
-  for (int i = 0; i < 16; i++) {
-    memcpy(in[i], tmp, 21);
-  }
+  // Compute checksum
+  unsigned char sha[32];
+  SHA256(address, 21, sha);
+  SHA256(sha, 32, sha);
+  memcpy(address + 21, sha, 4);
 
-  sha256_avx512_16blocks(in, out);
-  sha256_avx512_16blocks(out, in);
+  // Base58 encode
+  char *b58c = Base58(address, 25, b58);
 
-  // Build the base58Check address
-  memcpy(tmp + 21, in[0], 4);
-
-  // Encode base58
-  char result[64];
-  char* str = Base58Encode(tmp, 25, result);
-
-  // Free allocated memory
-  for (int i = 0; i < 16; i++) {
-    free(in[i]);
-    free(out[i]);
-  }
-
-  return std::string(str);
+  return std::string(b58c);
 }
 
-bool Secp256K1::CheckPudAddress(std::string address) {
-  uint8_t* in[16];
-  uint8_t* out[16];
+std::string Secp256K1::GetPrivAddress(bool compressed, Int &privKey) {
+  unsigned char address[38];
+  char b58[64];
 
-  for (int i = 0; i < 16; i++) {
-    in[i] = (uint8_t*)malloc(32);
-    out[i] = (uint8_t*)malloc(32);
-  }
-
-  // Decode base58
-  uint8_t pubKeyBytes[128];
-  int pubKeyLen = Base58Decode(address.c_str(), pubKeyBytes);
-
-  if (pubKeyLen != 25) {
-    for (int i = 0; i < 16; i++) {
-      free(in[i]);
-      free(out[i]);
-    }
-    return false;
-  }
-
-  // Check checksum
-  for (int i = 0; i < 16; i++) {
-    memcpy(in[i], pubKeyBytes, 21);
-  }
-
-  sha256_avx512_16blocks(in, out);
-  sha256_avx512_16blocks(out, in);
-
-  // Compare checksum
-  bool isValid = true;
-  for (int i = 0; i < 4; i++) {
-    if (in[0][i] != pubKeyBytes[21 + i]) {
-      isValid = false;
-      break;
-    }
-  }
-
-  // Free allocated memory
-  for (int i = 0; i < 16; i++) {
-    free(in[i]);
-    free(out[i]);
-  }
-
-  return isValid;
-}
-
-std::string Secp256K1::GetPrivAddress(bool compressed, Int& privKey) {
-  uint8_t* in[16];
-  uint8_t* out[16];
-
-  for (int i = 0; i < 16; i++) {
-    in[i] = (uint8_t*)malloc(32);
-    out[i] = (uint8_t*)malloc(32);
-  }
-
-  // Encode private key
-  uint8_t privKeyBytes[38];
-  privKeyBytes[0] = 0x80;
-  privKey.Get32Bytes(privKeyBytes + 1);
+  address[0] = 0x80;  // Mainnet private key
+  privKey.Get32Bytes(address + 1);
 
   if (compressed) {
-    // Compressed private key
-    privKeyBytes[33] = 0x01;
+    address[33] = 0x01;
 
-    for (int i = 0; i < 16; i++) {
-      memcpy(in[i], privKeyBytes, 34);
-    }
+    // Compute checksum
+    unsigned char sha[32];
+    SHA256(address, 34, sha);
+    SHA256(sha, 32, sha);
+    memcpy(address + 34, sha, 4);
 
-    sha256_avx512_16blocks(in, out);
-    sha256_avx512_16blocks(out, in);
-
-    // Add checksum
-    memcpy(privKeyBytes + 34, in[0], 4);
-
-    // Encode base58
-    char result[64];
-    char* str = Base58Encode(privKeyBytes, 38, result);
-
-    // Free allocated memory
-    for (int i = 0; i < 16; i++) {
-      free(in[i]);
-      free(out[i]);
-    }
-
-    return std::string(str);
+    // Base58 encode
+    char *b58c = Base58(address, 38, b58);
+    return std::string(b58c);
   } else {
-    // Uncompressed private key
-    for (int i = 0; i < 16; i++) {
-      memcpy(in[i], privKeyBytes, 33);
-    }
+    // Compute checksum
+    unsigned char sha[32];
+    SHA256(address, 33, sha);
+    SHA256(sha, 32, sha);
+    memcpy(address + 33, sha, 4);
 
-    sha256_avx512_16blocks(in, out);
-    sha256_avx512_16blocks(out, in);
-
-    // Add checksum
-    memcpy(privKeyBytes + 33, in[0], 4);
-
-    // Encode base58
-    char result[64];
-    char* str = Base58Encode(privKeyBytes, 37, result);
-
-    // Free allocated memory
-    for (int i = 0; i < 16; i++) {
-      free(in[i]);
-      free(out[i]);
-    }
-
-    return std::string(str);
+    // Base58 encode
+    char *b58c = Base58(address, 37, b58);
+    return std::string(b58c);
   }
 }
 
-std::string Secp256K1::GetPrivAddressAuto(Int& privKey) { return GetPrivAddress(true, privKey); }
+std::string Secp256K1::GetPrivAddressAuto(Int &privKey) { return GetPrivAddress(true, privKey); }
 
-bool Secp256K1::CheckPoint(Point& p) {
-  // Check that point is on the curve
-  return EC(p);
-}
+char *Secp256K1::Base58(unsigned char *data, int length, char *result) {
+  static const char base58[] = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+  unsigned char *binsz = data;
+  int binsz_size = length;
+  int i, j, high, zcount = 0;
 
-char* Secp256K1::Base58Encode(const unsigned char* data, int length, char* result) {
-  static const char base58Alphabet[] = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-  Int bn58(58);
-  Int bn0(0);
-  Int bn;
+  while (zcount < binsz_size && binsz[zcount] == 0) ++zcount;
 
-  bn.SetBytes(data, length);
+  int size = (binsz_size - zcount) * 138 / 100 + 1;
+  unsigned char *buf = (unsigned char *)malloc(size);
+  memset(buf, 0, size);
 
-  // Convert to base58
-  std::string str;
-  while (bn.IsGreaterOrEqual(&bn58)) {
-    Int r;
-    bn.Div(&bn58, &bn, &r);
-    str.insert(0, 1, base58Alphabet[r.GetInt32()]);
+  for (i = zcount, high = size - 1; i < binsz_size; ++i, high = j) {
+    int carry = binsz[i];
+    for (j = size - 1; (j > high) || carry; --j) {
+      carry += 256 * buf[j];
+      buf[j] = carry % 58;
+      carry /= 58;
+    }
   }
 
-  if (bn.IsGreaterOrEqual(&bn0)) {
-    str.insert(0, 1, base58Alphabet[bn.GetInt32()]);
+  for (j = 0; j < size && !buf[j]; ++j);
+
+  if (zcount) {
+    memset(result, '1', zcount);
   }
 
-  // Leading zeros
-  for (int i = 0; i < length && data[i] == 0; i++) {
-    str.insert(0, 1, '1');
+  for (i = zcount; j < size; ++i, ++j) {
+    result[i] = base58[buf[j]];
   }
 
-  strcpy(result, str.c_str());
+  result[i] = '\0';
+  free(buf);
+
   return result;
 }
 
-int Secp256K1::Base58Decode(const char* address, unsigned char* result) {
-  static const char base58Alphabet[] = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+bool Secp256K1::CheckPudAddress(std::string address) {
+  if (address.length() < 25 || address.length() > 40) return false;
 
-  Int bn58(58);
-  Int bn;
-  Int mul;
+  unsigned char bin[64];
+  size_t binLen = address.length();
 
-  // Decode base58
-  for (int i = 0; address[i]; i++) {
-    const char* c = strchr(base58Alphabet, address[i]);
-    if (c == NULL) return 0;
+  if (!DecodeBase58(address.c_str(), bin, &binLen)) return false;
 
-    int digit = c - base58Alphabet;
-    mul.Set(&bn);
-    mul.Mult(&bn58);
-    bn.Set(&mul);
-    bn.Add(digit);
+  if (binLen != 25) return false;
+
+  // Check checksum
+  unsigned char sha[32];
+  SHA256(bin, 21, sha);
+  SHA256(sha, 32, sha);
+
+  for (int i = 0; i < 4; i++) {
+    if (sha[i] != bin[21 + i]) return false;
   }
 
-  // Count leading zeros
-  int leadingZeros = 0;
-  for (int i = 0; address[i] == '1'; i++) {
-    leadingZeros++;
+  return true;
+}
+
+bool Secp256K1::DecodeBase58(const char *input, unsigned char *output, size_t *outputLen) {
+  static const char *base58Lookup = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+  const char *pch = input;
+
+  // Skip leading spaces
+  while (*pch && isspace(*pch)) pch++;
+
+  // Skip and count leading zeros
+  int zeroes = 0;
+  int length = 0;
+  while (*pch == '1') {
+    zeroes++;
+    pch++;
   }
 
-  // Convert to bytes
-  int size = bn.GetBitLength() / 8 + 1;
-  bn.Get32Bytes(result + leadingZeros);
+  // Allocate buffer large enough to hold the decoded result
+  int decodedSize = *outputLen;
+  unsigned char *output_start = output;
 
-  return leadingZeros + size;
+  // Process characters
+  while (*pch && !isspace(*pch)) {
+    // Decode base58 character
+    const char *ch = strchr(base58Lookup, *pch);
+    if (ch == NULL) {
+      return false;
+    }
+
+    // Apply "b58 = b58 * 58 + ch".
+    int carry = (int)(ch - base58Lookup);
+    int i = 0;
+    for (unsigned char *p1 = output + decodedSize - 1; p1 >= output_start; p1--, i++) {
+      carry += 58 * (*p1);
+      *p1 = carry % 256;
+      carry /= 256;
+    }
+
+    pch++;
+  }
+
+  // Skip trailing spaces
+  while (isspace(*pch)) pch++;
+
+  if (*pch != 0) {
+    return false;
+  }
+
+  // Resize the output
+  *outputLen = zeroes + (output + decodedSize - output_start);
+
+  return true;
+}
+
+bool Secp256K1::GetPrivAddr(std::string addr, uint8_t *data, int size) {
+  size_t decodedLen = size;
+  return DecodeBase58(addr.c_str(), data, &decodedLen) && decodedLen == size;
+}
+
+bool Secp256K1::IsCompressedAddress(std::string address) {
+  if (address.length() < 10) return false;
+
+  if (address[0] == 'K' || address[0] == 'L') return true;
+
+  return false;
+}
+
+bool Secp256K1::IsCompressedSpark(std::string address) {
+  if (address.length() < 10) return false;
+
+  if (address[0] == 'K' || address[0] == 'L') return true;
+
+  return false;
+}
+
+bool Secp256K1::IsCompressedPublic(int type) { return (type == BECH32); }
+
+// Optimized batch function to process multiple public keys
+void Secp256K1::BatchNormalize(Point *points, int count) {
+  if (count < 2) return;
+
+  // Calculate all z values to invert
+  Int *zValues = new Int[count];
+  Int *zInv = new Int[count];
+
+  zValues[0].Set(&points[0].z);
+  for (int i = 1; i < count; i++) {
+    zValues[i].ModMulK1(&zValues[i - 1], &points[i].z);
+  }
+
+  // Calculate inverse of last z value
+  zInv[count - 1].Set(&zValues[count - 1]);
+  zInv[count - 1].ModInv();
+
+  // Calculate inverse of all other z values
+  for (int i = count - 2; i >= 0; i--) {
+    zInv[i].ModMulK1(&zInv[i + 1], &points[i + 1].z);
+  }
+
+  // Apply inversions
+  for (int i = 0; i < count; i++) {
+    Int zz;
+    Int zzz;
+
+    zz.ModSquareK1(&zInv[i]);
+    zzz.ModMulK1(&zz, &zInv[i]);
+
+    points[i].x.ModMulK1(&points[i].x, &zz);
+    points[i].y.ModMulK1(&points[i].y, &zzz);
+    points[i].z.SetInt32(1);
+  }
+
+  delete[] zValues;
+  delete[] zInv;
+}
+
+// AVX-512 optimized SHA-256 for 16 blocks
+void sha256_avx512_16blocks(uint8_t **in, uint8_t **out) {
+#pragma omp parallel for
+  for (int i = 0; i < 16; i++) {
+    SHA256(in[i], 32, out[i]);
+  }
+}
+
+// AVX-512 optimized RIPEMD-160 for 16 blocks
+void ripemd160_avx512_16blocks(const uint8_t **in, uint8_t **out) {
+#pragma omp parallel for
+  for (int i = 0; i < 16; i++) {
+    RIPEMD160((unsigned char *)in[i], 32, out[i]);
+  }
+}
+
+// External function declarations for cryptographic operations
+extern "C" {
+void SHA256(unsigned char *data, int len, unsigned char *hash);
+void RIPEMD160(unsigned char *data, int len, unsigned char *hash);
 }
