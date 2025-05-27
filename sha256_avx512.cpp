@@ -3,7 +3,6 @@
 #include <string.h>
 
 #include "sha256_avx512.h"
-#include "timer.h"
 
 #define BYTESWAP(x) \
   _mm_shuffle_epi8(x, _mm_set_epi8(12, 13, 14, 15, 8, 9, 10, 11, 4, 5, 6, 7, 0, 1, 2, 3))
