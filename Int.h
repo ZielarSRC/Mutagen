@@ -121,6 +121,7 @@ class Int {
   void GCD(Int *a);
   void Mod(Int *n);
   void ModInv();
+  void ModInv(Int *a);
   void MontgomeryMult(Int *a, Int *b);
   void MontgomeryMult(Int *a);
   void ModAdd(Int *a);
