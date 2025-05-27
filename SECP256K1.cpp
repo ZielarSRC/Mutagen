@@ -19,9 +19,6 @@ static Int SECP256K1_P([] {
   return p;
 }());
 
-// Generator table - wyrównany do cache line (64 bytes)
-alignas(64) Point GTable[256 * 32];
-
 Secp256K1::Secp256K1() {}
 Secp256K1::~Secp256K1() {}
 
@@ -34,18 +31,23 @@ void Secp256K1::Init() {
   // Prefetch dla optymalizacji pamięci
   __builtin_prefetch(&GTable[0], 1, 3);
 
+  // Prime for the finite field
   Int P;
   P.SetBase16("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F");
+
+  // Set up field
   Int::SetupField(&P);
 
+  // Generator point and order
   G.x.SetBase16("79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798");
   G.y.SetBase16("483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8");
   G.z.SetInt32(1);
   order.SetBase16("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141");
+
   Int::InitK1(&order);
 
   // KROK 1: Sekwencyjne przygotowanie punktów bazowych - KRYTYCZNE!
-  // To musi być sekwencyjne, bo każdy punkt zależy od poprzedniego
+  // To musi być sekwencyjne, bo każdy punkt zależy od poprzedniego (jak w działającej wersji)
   alignas(64) Point basePoints[32];
   Point N(G);
 
@@ -61,18 +63,19 @@ void Secp256K1::Init() {
 #pragma omp parallel for schedule(dynamic, 1) num_threads(32)
   for (int i = 0; i < 32; ++i) {
     Point localN = basePoints[i];
-    const Point &basePoint = basePoints[i];
+    Point basePoint = basePoints[i];  // Lokalna kopia - usuwa const problem
 
     // Prefetch dla tej sekcji tabeli
     __builtin_prefetch(&GTable[i * 256], 1, 3);
 
     GTable[i * 256] = localN;
 
-    // Budowanie pozostałych elementów w tej sekcji
-    for (int j = 1; j < 256; ++j) {
+    // Budowanie pozostałych elementów w tej sekcji - zgodnie z działającą wersją
+    for (int j = 1; j < 255; j++) {
       localN = AddDirect(localN, basePoint);
       GTable[i * 256 + j] = localN;
     }
+    GTable[i * 256 + 255] = localN;  // Dummy point for check function
   }
 
   // Reset OpenMP do domyślnych ustawień
@@ -241,36 +244,28 @@ Point Secp256K1::Double(Point &p) {
 }
 
 Point Secp256K1::ComputePublicKey(Int *privKey) {
-  // POPRAWKA: Sekwencyjne obliczanie bez race conditions
+  // Użyj algorytmu z działającej wersji
+  int i = 0;
+  uint8_t b;
   Point Q;
   Q.Clear();
 
-  // Znajdź pierwszy znaczący bajt
-  int firstByte = 0;
-  uint8_t b = 0;
-  for (int i = 0; i < 32; i++) {
+  // Search first significant byte
+  for (i = 0; i < 32; i++) {
     b = privKey->GetByte(i);
-    if (b) {
-      firstByte = i;
-      break;
-    }
+    if (b) break;
   }
 
-  // Jeśli wszystkie bajty to 0, zwróć punkt w nieskończoności
   if (b == 0) {
-    Q.Clear();
-    return Q;
+    return Q;  // Return point at infinity
   }
 
-  // Ustaw pierwszy punkt
-  Q = GTable[firstByte * 256 + (b - 1)];
+  Q = GTable[256 * i + (b - 1)];
+  i++;
 
-  // Dodaj pozostałe punkty sekwencyjnie
-  for (int i = firstByte + 1; i < 32; i++) {
+  for (; i < 32; i++) {
     b = privKey->GetByte(i);
-    if (b) {
-      Q = Add2(Q, GTable[i * 256 + (b - 1)]);
-    }
+    if (b) Q = Add2(Q, GTable[256 * i + (b - 1)]);
   }
 
   Q.Reduce();
