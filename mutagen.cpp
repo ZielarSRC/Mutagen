@@ -3,7 +3,6 @@
 #include <numa.h>
 #include <omp.h>
 #include <tbb/concurrent_queue.h>
-#include <tbb/parallel_for.h>
 #include <tbb/global_control.h>
 
 #include <algorithm>
@@ -296,8 +295,8 @@ alignas(CACHE_LINE_SIZE) double mkeysPerSec = 0.0;
 alignas(CACHE_LINE_SIZE) chrono::time_point<chrono::high_resolution_clock> tStart;
 
 // Thread-local storage for batch processing
-thread_local alignas(64) uint8_t local_sha_buffer[HASH_BATCH_SIZE * 64];
-thread_local alignas(64) uint8_t local_ripemd_buffer[HASH_BATCH_SIZE * 64];
+alignas(64) thread_local uint8_t local_sha_buffer[HASH_BATCH_SIZE * 64];
+alignas(64) thread_local uint8_t local_ripemd_buffer[HASH_BATCH_SIZE * 64];
 
 // Performance statistics
 struct PerformanceStats {
@@ -730,7 +729,8 @@ void worker(Secp256K1* secp, int bit_length, int flip_count, int threadId, AVXCo
     { g_threadPrivateKeys[threadId] = keyStr; }
 
     auto keyEnd = chrono::high_resolution_clock::now();
-    perfStats.elapsed_key_time += chrono::duration<double>(keyEnd - keyStart).count();
+    perfStats.elapsed_key_time.store(perfStats.elapsed_key_time.load() + 
+                              chrono::duration<double>(keyEnd - keyStart).count());
     perfStats.key_generations++;
 
     pointStart = chrono::high_resolution_clock::now();
@@ -809,7 +809,8 @@ void worker(Secp256K1* secp, int bit_length, int flip_count, int threadId, AVXCo
     }
 
     auto pointEnd = chrono::high_resolution_clock::now();
-    perfStats.elapsed_point_time += chrono::duration<double>(pointEnd - pointStart).count();
+    perfStats.elapsed_key_time.store(perfStats.elapsed_key_time.load() + 
+                              chrono::duration<double>(keyEnd - keyStart).count());
     perfStats.point_operations++;
 
     hashStart = chrono::high_resolution_clock::now();
@@ -898,7 +899,8 @@ void worker(Secp256K1* secp, int bit_length, int flip_count, int threadId, AVXCo
         }
 
         auto hashEnd = chrono::high_resolution_clock::now();
-        perfStats.elapsed_hash_time += chrono::duration<double>(hashEnd - hashStart).count();
+        perfStats.elapsed_key_time.store(perfStats.elapsed_key_time.load() + 
+                              chrono::duration<double>(keyEnd - keyStart).count());
         perfStats.hash_operations++;
 
         // Increment total checked count atomically
@@ -1037,7 +1039,7 @@ int main(int argc, char* argv[]) {
   tStart = chrono::high_resolution_clock::now();
 
   // Initialize Intel TBB with optimal thread count for Xeon 8488C
-  tbb::task_scheduler_init init(WORKERS);
+  tbb::global_control global_limit(tbb::global_control::max_allowed_parallelism, WORKERS);
 
   // Initialize NUMA settings if enabled
   if (ENABLE_NUMA) {
