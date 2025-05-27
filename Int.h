@@ -214,7 +214,7 @@ class Int {
   static void SetThreadAffinity(int thread_id);
 
   // Properly aligned data for AVX-512 operations
-  ALIGN64 union {
+  union ALIGN64 {
     uint32_t bits[NB32BLOCK];
     uint64_t bits64[NB64BLOCK];
     __m512i bitsAVX512[NB64BLOCK / 8 + (NB64BLOCK % 8 != 0)];  // AVX-512 vectors
