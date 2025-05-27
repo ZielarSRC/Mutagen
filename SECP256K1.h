@@ -22,21 +22,17 @@ class Secp256K1 {
   Point AddDirect(Point &p1, Point &p2);
   Point Add(Point &p1, Point &p2);
   Point Add2(Point &p1, Point &p2);
-  Point AddJacobian(Point &p1, Point &p2);
   Point Double(Point &p);
-  Point DoubleJacobian(Point &p);
   void GetHash160(int type, bool compressed, Point &pubKey, unsigned char *hash);
   void GetHash160_Batch16(int type, bool compressed, Point **pubKey, uint8_t **hash);
   std::string GetPrivAddress(bool compressed, Int &privKey);
   std::string GetPublicKeyHex(bool compressed, Point &pubKey);
-  void GetPublicKeyHex(bool compressed, Point &pubKey, char *dst);
   Point NextKey(Point &key);
   bool EC(Point &p);
   Point ScalarMultiplication(Point &p, Int &n);
-  Point ScalarMultiplication(Point &p, Int *n);
-  Point ScalarMultiplication(Int *n);
-  Point DoubleAndAdd(Point *p, Int &n, int from, int length);
-  bool CheckPoint(Point &p);
+  Point ScalarMultiplication(Int &n);
+  Point DoubleAndAdd(Point &p, Int &n);
+  __attribute__((target("avx512f"))) Point DoubleAndAddAVX512(Point &p, Int &n);
 
   // Decoder
   bool CheckPudAddress(std::string address);
@@ -55,32 +51,26 @@ class Secp256K1 {
   static bool IsCompressedSpark(std::string address);
   static bool IsCompressedPublic(int type);
 
-  // Base58 encoding/decoding functions
-  static char *Base58Encode(const unsigned char *data, int length, char *result);
-  static int Base58Decode(const char *address, unsigned char *result);
+  // Xeon Platinum 8488C optimized functions
+  __attribute__((target("avx512f"))) void BatchNormalize(Point *points, int count);
 
-  // Point array for scalars
-  Point *_g;
-
-  // Group parameters
-  Int _p;  // Prime for the finite field
-  Int _s;  // Order of the group
-  Int _a;  // Group parameter
-  Int _b;  // Group parameter
+  // Public curve parameters
+  Int P;    // Prime for the finite field
+  Int N;    // Curve order
+  Int B;    // Curve parameter
+  Point G;  // Generator point
 
  private:
-  Int _Gx;   // Base point x coordinate
-  Int _Gy;   // Base point y coordinate
-  Int _two;  // Constant 2
-  Int _groupBSize;
-  double _groupSize;
+  Int _Gx;  // Generator x coordinate
+  Int _Gy;  // Generator y coordinate
+  Int _Af;  // a coefficient (0 for secp256k1)
 };
 
-// Funkcje do obsługi hashowania
+// SHA256 and RIPEMD160 functions
 void SHA256(unsigned char *data, int len, unsigned char *hash);
 void RIPEMD160(unsigned char *data, int len, unsigned char *hash);
 
-// Funkcje do równoległego hashowania
+// Batch processing functions
 void sha256_avx512_16blocks(uint8_t **in, uint8_t **out);
 void ripemd160_avx512_16blocks(const uint8_t **in, uint8_t **out);
 
