@@ -3,6 +3,10 @@
 
 #include "Int.h"
 
+// Forward declaration
+class Secp256K1;
+extern Secp256K1 *secp256k1;
+
 class Point {
  public:
   Point();
@@ -14,20 +18,21 @@ class Point {
   void Set(Int *x, Int *y);
   void Set(Int *x, Int *y, Int *z);
   void Set(Point &p);
-  bool IsZero();
-  bool Equal(Point &p);
+  bool IsZero() const;
+  bool IsEqual(const Point &p) const;
   Point &operator=(const Point &p);
   Point Neg();
 
-  // ECDSA
-  bool EC(Int &n);
+  void Reduce();
+  void Affine();
+  bool EC();
 
-  // Point operations
+  // Optimized methods for Xeon Platinum 8488C
   Point DoubleDirect();
   void Normalize();
-
-  // Initialize with generator parameters
-  void Init(Int *p, Int *s);
+  Point Double();
+  Point Add(const Point &p);
+  Point Add2(const Point &p);
 
   Int x;
   Int y;
