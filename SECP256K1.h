@@ -29,8 +29,14 @@ class Secp256K1 {
   void GetHash160_Batch16(int type, bool compressed, Point **pubKey, uint8_t **hash);
   std::string GetPrivAddress(bool compressed, Int &privKey);
   std::string GetPublicKeyHex(bool compressed, Point &pubKey);
+  void GetPublicKeyHex(bool compressed, Point &pubKey, char *dst);
   Point NextKey(Point &key);
   bool EC(Point &p);
+  Point ScalarMultiplication(Point &p, Int &n);
+  Point ScalarMultiplication(Point &p, Int *n);
+  Point ScalarMultiplication(Int *n);
+  Point DoubleAndAdd(Point *p, Int &n, int from, int length);
+  bool CheckPoint(Point &p);
 
   // Decoder
   bool CheckPudAddress(std::string address);
@@ -49,34 +55,33 @@ class Secp256K1 {
   static bool IsCompressedSpark(std::string address);
   static bool IsCompressedPublic(int type);
 
-  Point GJ;  // Generator Jacobian
-  Point G;   // Generator
+  // Base58 encoding/decoding functions
+  static char *Base58Encode(const unsigned char *data, int length, char *result);
+  static int Base58Decode(const char *address, unsigned char *result);
+
+  // Point array for scalars
+  Point *_g;
+
+  // Group parameters
+  Int _p;  // Prime for the finite field
+  Int _s;  // Order of the group
+  Int _a;  // Group parameter
+  Int _b;  // Group parameter
 
  private:
-  Int _s;       // group order
-  Int _p;       // prime
-  Int _r;       // prime - 2
-  Int _a;       // group parameter
-  Int _b;       // group parameter
-  Int _n;       // order of the group
-  Int _nh;      // half order of the group
-  Int _lambda;  // factor to convert endomorphism
-  Int _Gx;      // Base point x coordinate
-  Int _Gy;      // Base point y coordinate
-  Point _g;     // Base point
-  Point _g2;    // 2*Base point
-  int _groupBSize;
+  Int _Gx;   // Base point x coordinate
+  Int _Gy;   // Base point y coordinate
+  Int _two;  // Constant 2
+  Int _groupBSize;
   double _groupSize;
-  Secp256K1 *_secp;
-  std::vector<char> _lut;
-  Int _2;  // Constant 2
-  Int _3;  // Constant 3
 };
 
-// Deklaracje funkcji, które powodują błędy kompilacji
-extern "C" {
+// Funkcje do obsługi hashowania
+void SHA256(unsigned char *data, int len, unsigned char *hash);
+void RIPEMD160(unsigned char *data, int len, unsigned char *hash);
+
+// Funkcje do równoległego hashowania
 void sha256_avx512_16blocks(uint8_t **in, uint8_t **out);
 void ripemd160_avx512_16blocks(const uint8_t **in, uint8_t **out);
-}
 
 #endif  // SECP256K1H
