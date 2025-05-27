@@ -1,4 +1,11 @@
+#include <immintrin.h>
+
+#include <cstring>
+
 #include "Point.h"
+#include "SECP256K1.h"
+
+Secp256K1 *secp256k1 = NULL;
 
 Point::Point() { Clear(); }
 
@@ -39,9 +46,9 @@ void Point::Set(Int *x, Int *y, Int *z) {
 }
 
 void Point::Set(Point &p) {
-  x.Set(&p.x);
-  y.Set(&p.y);
-  z.Set(&p.z);
+  this->x.Set(&p.x);
+  this->y.Set(&p.y);
+  this->z.Set(&p.z);
 }
 
 Point &Point::operator=(const Point &p) {
@@ -51,104 +58,266 @@ Point &Point::operator=(const Point &p) {
   return *this;
 }
 
-bool Point::IsZero() { return x.IsZero() && y.IsZero(); }
+bool Point::IsZero() const { return x.IsZero() && y.IsZero(); }
 
-bool Point::Equal(Point &p) { return x.IsEqual(&p.x) && y.IsEqual(&p.y); }
+bool Point::IsEqual(const Point &p) const {
+  if (z.IsZero() && p.z.IsZero()) return true;
+
+  if (z.IsZero() || p.z.IsZero()) return false;
+
+  if (z.IsOne() && p.z.IsOne()) {
+    return x.IsEqual(&p.x) && y.IsEqual(&p.y);
+  }
+
+  // X1*Z2^2 = X2*Z1^2
+  // Y1*Z2^3 = Y2*Z1^3
+
+  Int z1z1;
+  Int z2z2;
+  z1z1.ModSquare(&z, &secp256k1->P);
+  z2z2.ModSquare((Int *)&p.z, &secp256k1->P);
+
+  Int u1;
+  Int u2;
+  u1.ModMul(&x, &z2z2, &secp256k1->P);
+  u2.ModMul((Int *)&p.x, &z1z1, &secp256k1->P);
+
+  if (!u1.IsEqual(&u2)) return false;
+
+  Int z1z1z1;
+  Int z2z2z2;
+  z1z1z1.ModMul(&z1z1, &z, &secp256k1->P);
+  z2z2z2.ModMul(&z2z2, (Int *)&p.z, &secp256k1->P);
+
+  Int s1;
+  Int s2;
+  s1.ModMul(&y, &z2z2z2, &secp256k1->P);
+  s2.ModMul((Int *)&p.y, &z1z1z1, &secp256k1->P);
+
+  return s1.IsEqual(&s2);
+}
 
 Point Point::Neg() {
   Point r;
   r.x.Set(&this->x);
-  r.y.Neg();
-  r.y.Add(&secp256k1->P);
-  r.z.SetInt32(1);
+  r.y.Set(&this->y);
+  r.z.Set(&this->z);
+  r.y.ModNeg();
   return r;
 }
 
 void Point::Normalize() {
+  if (z.IsZero()) {
+    Clear();
+    return;
+  }
+
   if (z.IsOne()) return;
 
   Int zi;
-  zi.ModInv(&z, &secp256k1->P);
+  zi.ModInv(&z);
 
   Int zi2;
-  zi2.ModSquare(&zi, &secp256k1->P);
+  zi2.ModSquare(&zi);
 
-  x.ModMul(&x, &zi2, &secp256k1->P);
-  y.ModMul(&y, &zi2, &secp256k1->P);
-  y.ModMul(&y, &zi, &secp256k1->P);
+  Int zi3;
+  zi3.ModMul(&zi2, &zi);
 
+  x.ModMul(&x, &zi2);
+  y.ModMul(&y, &zi3);
   z.SetInt32(1);
 }
 
-Point Point::DoubleDirect() {
-  Int _3;
-  _3.SetInt32(3);
-
-  Int a;
-  Int b;
-  Int c;
-  Int d;
-  Int e;
-  Int f;
-
-  // XX = X1^2
-  a.ModSquare(&x, &secp256k1->P);
-
-  // YY = Y1^2
-  b.ModSquare(&y, &secp256k1->P);
-
-  // ZZ = Z1^2
-  c.ModSquare(&z, &secp256k1->P);
-
-  // S = 4*X1*YY
-  d.ModMul(&x, &b, &secp256k1->P);
-  d.ModDouble(&secp256k1->P);
-  d.ModDouble(&secp256k1->P);
-
-  // M = 3*XX+a*ZZ^2
-  e.ModMul(&_3, &a, &secp256k1->P);
-
-  // T = M^2-2*S
-  f.ModSquare(&e, &secp256k1->P);
-  f.ModSub(&f, &d, &secp256k1->P);
-  f.ModSub(&f, &d, &secp256k1->P);
-
-  Point r;
-
-  // X3 = T
-  r.x.Set(&f);
-
-  // Y3 = M*(S-T)-8*YY^2
-  b.ModSquare(&b, &secp256k1->P);
-  b.ModDouble(&secp256k1->P);
-  b.ModDouble(&secp256k1->P);
-  b.ModDouble(&secp256k1->P);
-  d.ModSub(&d, &f, &secp256k1->P);
-  e.ModMul(&e, &d, &secp256k1->P);
-  e.ModSub(&e, &b, &secp256k1->P);
-  r.y.Set(&e);
-
-  // Z3 = 2*Y1*Z1
-  r.z.ModMul(&y, &z, &secp256k1->P);
-  r.z.ModDouble(&secp256k1->P);
-
-  return r;
+void Point::Reduce() {
+  x.Mod(&secp256k1->P);
+  y.Mod(&secp256k1->P);
+  z.Mod(&secp256k1->P);
 }
 
-void Point::Init(Int *p, Int *s) {
-  secp256k1 = new Secp256K1();
-  secp256k1->Init();
+void Point::Affine() {
+  Normalize();
+  Reduce();
 }
 
-bool Point::EC(Int &n) {
+bool Point::EC() {
+  // y^2 = x^3 + 7
+  // y^2 - x^3 - 7 = 0
+
+  if (IsZero()) return true;
+
   Int y2;
   Int x3;
+  Int bn;
 
-  // y^2 = x^3 + 7
-  y2.ModSquare(&y, &n);
-  x3.ModMul(&x, &x, &n);
-  x3.ModMul(&x3, &x, &n);
-  x3.ModAdd(&x3, Int(7), &n);
+  y2.ModSquare(&y);
+  x3.ModSquare(&x);
+  x3.ModMul(&x3, &x);
+  x3.ModAdd(&secp256k1->B);
 
-  return y2.IsEqual(&x3);
+  bn.ModSub(&y2, &x3);
+
+  return bn.IsZero();
+}
+
+Point Point::DoubleDirect() {
+  // https://hyperelliptic.org/EFD/g1p/auto-shortw-jacobian.html
+  // dbl-2007-bl
+
+  // Cost: 1M + 8S + 1*a + 10add + 2*2 + 1*3 + 1*8
+
+  if (IsZero()) {
+    return *this;
+  }
+
+  Int XX;
+  Int YY;
+  Int YYYY;
+  Int ZZ;
+  Int S;
+  Int M;
+  Int T;
+
+  XX.ModSquare(&x);
+  YY.ModSquare(&y);
+  YYYY.ModSquare(&YY);
+  ZZ.ModSquare(&z);
+
+  // S = 2*((X1+YY)^2-XX-YYYY)
+  S.ModAdd(&x, &YY);
+  S.ModSquare(&S);
+  S.ModSub(&XX);
+  S.ModSub(&YYYY);
+  S.ModAdd(&S, &S);
+
+  // M = 3*XX+a*ZZ^2
+  M.ModAdd(&XX, &XX);
+  M.ModAdd(&XX, &M);
+
+  // T = M^2-2*S
+  T.ModSquare(&M);
+  T.ModSub(&S);
+  T.ModSub(&S);
+
+  Point R;
+
+  // X3 = T
+  R.x.Set(&T);
+
+  // Y3 = M*(S-T)-8*YYYY
+  YYYY.ModDouble();
+  YYYY.ModDouble();
+  YYYY.ModDouble();
+  S.ModSub(&T);
+  R.y.ModMul(&M, &S);
+  R.y.ModSub(&YYYY);
+
+  // Z3 = (Y1+Z1)^2-YY-ZZ
+  R.z.ModAdd(&y, &z);
+  R.z.ModSquare(&R.z);
+  R.z.ModSub(&YY);
+  R.z.ModSub(&ZZ);
+
+  return R;
+}
+
+Point Point::Double() {
+  // 2P = P+P
+  if (IsZero()) {
+    return *this;
+  }
+
+  if (y.IsZero()) {
+    // P = (x,0)
+    // 2P = O (infinity)
+    Point r;
+    r.Clear();
+    return r;
+  }
+
+  return DoubleDirect();
+}
+
+Point Point::Add(const Point &p) {
+  // P + Q (general case)
+  if (p.IsZero()) return *this;
+
+  if (IsZero()) return p;
+
+  if (IsEqual(p)) {
+    return Double();
+  }
+
+  return Add2(p);
+}
+
+Point Point::Add2(const Point &p) {
+  // P1 + P2 (P1!=P2, P1!=-P2)
+
+  // Complete addition formula for a = 0 (Jacobian)
+  // http://www.hyperelliptic.org/EFD/g1p/auto-shortw-jacobian-0.html#addition-add-2007-bl
+
+  // Suitability: Suitable for fixed single coordinate.
+
+  Int Z1Z1;
+  Int Z2Z2;
+  Int U1;
+  Int U2;
+  Int S1;
+  Int S2;
+  Int H;
+  Int I;
+  Int J;
+  Int r;
+  Int V;
+
+  Z1Z1.ModSquare(&z);
+  Z2Z2.ModSquare((Int *)&p.z);
+
+  U1.ModMul(&x, &Z2Z2);
+  U2.ModMul((Int *)&p.x, &Z1Z1);
+
+  S1.ModMul(&y, (Int *)&p.z);
+  S1.ModMul(&S1, &Z2Z2);
+
+  S2.ModMul((Int *)&p.y, &z);
+  S2.ModMul(&S2, &Z1Z1);
+
+  H.ModSub(&U2, &U1);
+
+  // If H=0 then this is either doubling or point at infinity
+  // But we ruled out those cases earlier
+
+  I.ModAdd(&H, &H);
+  I.ModSquare(&I);
+
+  J.ModMul(&H, &I);
+
+  r.ModSub(&S2, &S1);
+  r.ModAdd(&r, &r);
+
+  V.ModMul(&U1, &I);
+
+  Point R;
+
+  // X3 = r^2 - J - 2*V
+  R.x.ModSquare(&r);
+  R.x.ModSub(&J);
+  R.x.ModSub(&V);
+  R.x.ModSub(&V);
+
+  // Y3 = r*(V-X3)-2*S1*J
+  V.ModSub(&R.x);
+  R.y.ModMul(&r, &V);
+  S1.ModMul(&S1, &J);
+  S1.ModAdd(&S1, &S1);
+  R.y.ModSub(&S1);
+
+  // Z3 = ((Z1+Z2)^2-Z1Z1-Z2Z2)*H
+  R.z.ModAdd(&z, (Int *)&p.z);
+  R.z.ModSquare(&R.z);
+  R.z.ModSub(&Z1Z1);
+  R.z.ModSub(&Z2Z2);
+  R.z.ModMul(&R.z, &H);
+
+  return R;
 }
