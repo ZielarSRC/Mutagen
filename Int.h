@@ -144,6 +144,8 @@ class Int {
   static void BatchModAdd(Int **inputs1, Int **inputs2, Int **outputs, Int *mod, int count);
   static void BatchModMul(Int **inputs1, Int **inputs2, Int **outputs, Int *mod, int count);
   static void BatchModInv(Int **inputs, Int **outputs, Int *mod, int count);
+  void BatchModInv(Int **inputs, Int **outputs, int count);
+  void BatchModMulK1order(Int **inputs1, Int **inputs2, Int **outputs, int count);
 
   // Assembly optimized functions
   void imm_umul_asm(const uint64_t *a, uint64_t b, uint64_t *res);
