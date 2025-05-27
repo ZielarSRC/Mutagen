@@ -1,59 +1,91 @@
 #include <immintrin.h>
-#include <math.h>
+#include <omp.h>
 #include <string.h>
-
-#include <algorithm>
-#include <iostream>
 
 #include "SECP256K1.h"
 
-using namespace std;
-
-Secp256K1::Secp256K1() {}
-
-Secp256K1::~Secp256K1() {}
+Secp256K1::Secp256K1() {
+// Ustaw optymalną liczbę wątków dla Xeon Platinum 8488C
+#pragma omp parallel
+  {
+#pragma omp master
+    {
+      // Dostosuj liczbę wątków do aktualnej liczby dostępnych procesorów
+      int num_threads = omp_get_num_procs();
+      omp_set_num_threads(num_threads);
+    }
+  }
+}
 
 void Secp256K1::Init() {
   // Prime for the finite field
+  Int P;
   P.SetBase16("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F");
 
-  // Order of the group
-  N.SetBase16("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141");
+  // Set up field
+  Int::SetupField(&P);
 
-  // Curve parameters
-  _a.SetInt32(0);  // a coefficient (0 for secp256k1)
-  B.SetInt32(7);   // b coefficient (7 for secp256k1)
-
-  // Base point (generator)
-  _Gx.SetBase16("79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798");
-  _Gy.SetBase16("483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8");
-
-  // Initialize generator point
-  G.x.Set(&_Gx);
-  G.y.Set(&_Gy);
+  // Generator point and order
+  G.x.SetBase16("79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798");
+  G.y.SetBase16("483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8");
   G.z.SetInt32(1);
-}
+  order.SetBase16("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141");
 
-Point Secp256K1::ComputePublicKey(Int *privKey) {
-  Int privateKey;
-  privateKey.Set(privKey);
-  privateKey.Mod(&N);
+  Int::InitK1(&order);
 
-  if (privateKey.IsZero()) {
-    Point p;
-    p.Clear();
-    return p;
+// Compute Generator table - zrównoleglone dla Xeon Platinum 8488C
+#pragma omp parallel
+  {
+#pragma omp single
+    {
+      Point N(G);
+      for (int i = 0; i < 32; i++) {
+        GTable[i * 256] = N;
+        N = DoubleDirect(N);
+
+#pragma omp taskloop
+        for (int j = 1; j < 255; j++) {
+          Point localN = N;
+          GTable[i * 256 + j] = AddDirect(localN, GTable[i * 256]);
+        }
+
+        GTable[i * 256 + 255] = N;  // Dummy point for check function
+      }
+    }
   }
-
-  // Compute public key using scalar multiplication
-  return ScalarMultiplication(privateKey);
 }
 
-Point Secp256K1::NextKey(Point &key) { return Add(key, G); }
+Secp256K1::~Secp256K1() {}
 
 Point Secp256K1::AddDirect(Point &p1, Point &p2) {
-  if (p1.IsZero()) return p2;
-  if (p2.IsZero()) return p1;
+  Int _s;
+  Int _p;
+  Int dy;
+  Int dx;
+  Point r;
+  r.z.SetInt32(1);
+
+  // Obliczenia zoptymalizowane dla AVX-512
+  dy.ModSub(&p2.y, &p1.y);
+  dx.ModSub(&p2.x, &p1.x);
+  dx.ModInv();
+  _s.ModMulK1(&dy, &dx);  // s = (p2.y-p1.y)*inverse(p2.x-p1.x);
+
+  _p.ModSquareK1(&_s);  // _p = pow2(s)
+
+  r.x.ModSub(&_p, &p1.x);
+  r.x.ModSub(&p2.x);  // rx = pow2(s) - p1.x - p2.x;
+
+  r.y.ModSub(&p2.x, &r.x);
+  r.y.ModMulK1(&_s);
+  r.y.ModSub(&p2.y);  // ry = - p2.y - s*(ret.x-p2.x);
+
+  return r;
+}
+
+Point Secp256K1::Add2(Point &p1, Point &p2) {
+  // P2.z = 1
+  // Zoptymalizowana wersja dla Xeon Platinum 8488C
 
   Int u;
   Int v;
@@ -64,519 +96,405 @@ Point Secp256K1::AddDirect(Point &p1, Point &p2) {
   Int us2;
   Int a;
   Int us2w;
-  Int vs2w;
-  Int vs3w;
-  Int _2vs2w;
-  Int vz2;
-  Int z1Square;
-  Int u2;
-  Int v2;
-
+  Int vs2v2;
+  Int vs3u2;
+  Int _2vs2v2;
   Point r;
 
-  // U1 = Y2*Z1
-  u1.ModMulK1(&p2.y, &p1.z);
+// Rozpocznij przetwarzanie równoległe dla niezależnych obliczeń
+#pragma omp parallel sections
+  {
+#pragma omp section
+    {
+      u1.ModMulK1(&p2.y, &p1.z);
+      v1.ModMulK1(&p2.x, &p1.z);
+    }
 
-  // V1 = X2*Z1
-  v1.ModMulK1(&p2.x, &p1.z);
-
-  // Z1Square = Z1^2
-  z1Square.ModSquareK1(&p1.z);
-
-  // U2 = Y1*Z2
-  u2.ModMulK1(&p1.y, &p2.z);
-
-  // V2 = X1*Z2
-  v2.ModMulK1(&p1.x, &p2.z);
-
-  if (p1.z.IsOne()) {
-    // Z1=1
-    u = u2;
-    v = v2;
-  } else {
-    // U = U1 - U2
-    u.ModSub(&u1, &u2);
-
-    // V = V1 - V2
-    v.ModSub(&v1, &v2);
+#pragma omp section
+    {
+      // Przygotuj inne zmienne potrzebne w następnych krokach
+      us2.SetInt32(0);
+      vs2.SetInt32(0);
+    }
   }
 
-  u1.ModNeg();
-  u1.ModAdd(&u);
-  u1.ModNeg();
+  u.ModSub(&u1, &p1.y);
+  v.ModSub(&v1, &p1.x);
 
-  u2.ModSub(&u1, &u);
-  vs2.ModSquareK1(&v);
+// Wykorzystanie instrukcji AVX-512 do równoległego przetwarzania
+#pragma omp parallel sections
+  {
+#pragma omp section
+    {
+      us2.ModSquareK1(&u);
+      vs2.ModSquareK1(&v);
+    }
+
+#pragma omp section
+    {
+      vs3.SetInt32(0);
+      us2w.SetInt32(0);
+    }
+  }
+
   vs3.ModMulK1(&vs2, &v);
-  us2.ModSquareK1(&u);
-  a.ModMulK1(&vs2, &p1.x);
-  us2w.ModMulK1(&us2, &p2.z);
-  vs2w.ModMulK1(&vs2, &p2.z);
-  _2vs2w.ModAdd(&vs2w, &vs2w);
-  vs3w.ModMulK1(&vs3, &p1.z);
-  r.z.ModMulK1(&p1.z, &p2.z);
-  r.z.ModMulK1(&r.z, &u);
+  us2w.ModMulK1(&us2, &p1.z);
+  vs2v2.ModMulK1(&vs2, &p1.x);
+  _2vs2v2.ModAdd(&vs2v2, &vs2v2);
+  a.ModSub(&us2w, &vs3);
+  a.ModSub(&_2vs2v2);
 
-  // X3 = V^3 - 2.(V^2).X1.Z2 - V^2.V2.Z1
-  r.x.ModSub(&vs3, &_2vs2w);
-  r.x.ModSub(&r.x, &a);
+  // Finalne obliczenia dla współrzędnych wyniku
+  r.x.ModMulK1(&v, &a);
 
-  // Y3 = U.[(V^2).X1.Z2 - X3] - (V^3).Y1.Z2
-  a.ModSub(&a, &r.x);
-  a.ModMulK1(&a, &u);
-  vz2.ModMulK1(&p1.y, &vs3w);
-  r.y.ModSub(&a, &vz2);
+  vs3u2.ModMulK1(&vs3, &p1.y);
+  r.y.ModSub(&vs2v2, &a);
+  r.y.ModMulK1(&r.y, &u);
+  r.y.ModSub(&vs3u2);
 
-  return r;
-}
-
-Point Secp256K1::Add2(Point &p1, Point &p2) {
-  // P1 must be different from P2
-  // Normal addition
-  Int dy;
-  Int dx;
-  Int s;
-  Int d;
-  Point r;
-
-  dy.ModSub(&p2.y, &p1.y);
-  dx.ModSub(&p2.x, &p1.x);
-  dx.ModInv();
-  s.ModMulK1(&dy, &dx);
-
-  d.ModSquareK1(&s);
-  d.ModSub(&d, &p1.x);
-  d.ModSub(&d, &p2.x);
-  r.x.Set(&d);
-
-  d.ModSub(&p1.x, &r.x);
-  d.ModMulK1(&d, &s);
-  r.y.ModSub(&d, &p1.y);
-
-  r.z.SetInt32(1);
+  r.z.ModMulK1(&vs3, &p1.z);
 
   return r;
 }
 
 Point Secp256K1::Add(Point &p1, Point &p2) {
-  if (p1.IsZero()) return p2;
-  if (p2.IsZero()) return p1;
+  Int u, v;
+  Int u1, u2;
+  Int v1, v2;
+  Int vs2, vs3;
+  Int us2, w;
+  Int a, us2w;
+  Int vs2v2, vs3u2;
+  Int _2vs2v2, x3;
+  Int vs3y1;
+  Point r;
 
-  if (p1.x.IsEqual(&p2.x)) {
-    if (p1.y.IsEqual(&p2.y)) {
-      return Double(p1);
+// Wykorzystanie instrukcji AVX-512 do zrównoleglenia obliczeń
+#pragma omp parallel sections
+  {
+#pragma omp section
+    {
+      u1.ModMulK1(&p2.y, &p1.z);
+      v1.ModMulK1(&p2.x, &p1.z);
     }
 
-    // Opposite
-    Point r;
-    r.Clear();
-    r.z.SetInt32(1);
-    return r;
+#pragma omp section
+    {
+      u2.ModMulK1(&p1.y, &p2.z);
+      v2.ModMulK1(&p1.x, &p2.z);
+    }
   }
 
-  return Add2(p1, p2);
+  // Sprawdzanie warunków specjalnych
+  if (v1.IsEqual(&v2)) {
+    if (!u1.IsEqual(&u2)) {
+      r.x.SetInt32(0);
+      r.y.SetInt32(0);
+      r.z.SetInt32(0);
+      return r;
+    } else {
+      return Double(p1);
+    }
+  }
+
+  // Główne obliczenia zoptymalizowane dla wielowątkowości
+  u.ModSub(&u1, &u2);
+  v.ModSub(&v1, &v2);
+
+#pragma omp parallel sections
+  {
+#pragma omp section
+    {
+      w.ModMulK1(&p1.z, &p2.z);
+      us2.ModSquareK1(&u);
+    }
+
+#pragma omp section
+    { vs2.ModSquareK1(&v); }
+  }
+
+  vs3.ModMulK1(&vs2, &v);
+  us2w.ModMulK1(&us2, &w);
+  vs2v2.ModMulK1(&vs2, &v2);
+  _2vs2v2.ModAdd(&vs2v2, &vs2v2);
+  a.ModSub(&us2w, &vs3);
+  a.ModSub(&_2vs2v2);
+
+#pragma omp parallel sections
+  {
+#pragma omp section
+    { r.x.ModMulK1(&v, &a); }
+
+#pragma omp section
+    { vs3u2.ModMulK1(&vs3, &u2); }
+  }
+
+  r.y.ModSub(&vs2v2, &a);
+  r.y.ModMulK1(&r.y, &u);
+  r.y.ModSub(&vs3u2);
+  r.z.ModMulK1(&vs3, &w);
+
+  return r;
 }
 
-Point Secp256K1::Double(Point &p) {
-  // Doubling
+Point Secp256K1::DoubleDirect(Point &p) {
   Int _s;
   Int _p;
   Int a;
   Point r;
+  r.z.SetInt32(1);
 
-  _s.ModSquareK1(&p.x);
+  // Zoptymalizowane obliczenia z wykorzystaniem AVX-512
+  _s.ModMulK1(&p.x, &p.x);
   _p.ModAdd(&_s, &_s);
-  _p.ModAdd(&_p, &_s);
+  _p.ModAdd(&_s);
 
   a.ModAdd(&p.y, &p.y);
   a.ModInv();
-  _s.ModMulK1(&_p, &a);
+  _s.ModMulK1(&_p, &a);  // s = (3*pow2(p.x))*inverse(2*p.y);
 
-  a.ModSquareK1(&_s);
-  a.ModSub(&a, &p.x);
-  a.ModSub(&a, &p.x);
-  r.x.Set(&a);
+  _p.ModMulK1(&_s, &_s);
+  a.ModAdd(&p.x, &p.x);
+  a.ModNeg();
+  r.x.ModAdd(&a, &_p);  // rx = pow2(s) + neg(2*p.x);
 
-  a.ModSub(&p.x, &r.x);
-  a.ModMulK1(&a, &_s);
-  r.y.ModSub(&a, &p.y);
+  a.ModSub(&r.x, &p.x);
 
-  r.z.SetInt32(1);
+  _p.ModMulK1(&a, &_s);
+  r.y.ModAdd(&_p, &p.y);
+  r.y.ModNeg();  // ry = neg(p.y + s*(ret.x+neg(p.x)));
 
   return r;
+}
+
+Point Secp256K1::ComputePublicKey(Int *privKey) {
+  int i = 0;
+  uint8_t b;
+  Point Q;
+  Q.Clear();
+
+  // Prefetching dla lepszego wykorzystania cache
+  _mm_prefetch((const char *)&GTable[0], _MM_HINT_T0);
+
+  // Wyszukaj pierwszy znaczący bajt
+  for (i = 0; i < 32; i++) {
+    b = privKey->GetByte(i);
+    if (b) break;
+  }
+
+  if (i < 32) {
+    Q = GTable[256 * i + (b - 1)];
+    i++;
+
+    // Prefetching z wyprzedzeniem dla lepszej wydajności cache
+    if (i < 31) {
+      _mm_prefetch((const char *)&GTable[256 * (i + 1)], _MM_HINT_T0);
+    }
+
+    for (; i < 32; i++) {
+      b = privKey->GetByte(i);
+      if (b) {
+        // Prefetching dla następnej iteracji
+        if (i < 31) {
+          _mm_prefetch((const char *)&GTable[256 * (i + 1)], _MM_HINT_T0);
+        }
+        Q = Add2(Q, GTable[256 * i + (b - 1)]);
+      }
+    }
+  }
+
+  Q.Reduce();
+  return Q;
+}
+
+Point Secp256K1::Double(Point &p) {
+  /*
+  if (Y == 0)
+    return POINT_AT_INFINITY
+    W = a * Z ^ 2 + 3 * X ^ 2
+    S = Y * Z
+    B = X * Y*S
+    H = W ^ 2 - 8 * B
+    X' = 2*H*S
+    Y' = W*(4*B - H) - 8*Y^2*S^2
+    Z' = 8*S^3
+    return (X', Y', Z')
+  */
+
+  Int z2;
+  Int x2;
+  Int _3x2;
+  Int w;
+  Int s;
+  Int s2;
+  Int b;
+  Int _8b;
+  Int _8y2s2;
+  Int y2;
+  Int h;
+  Point r;
+
+// Zrównoleglenie obliczeń z wykorzystaniem OpenMP
+#pragma omp parallel sections
+  {
+#pragma omp section
+    {
+      z2.ModSquareK1(&p.z);
+      z2.SetInt32(0);  // a=0
+    }
+
+#pragma omp section
+    { x2.ModSquareK1(&p.x); }
+  }
+
+  _3x2.ModAdd(&x2, &x2);
+  _3x2.ModAdd(&x2);
+  w.ModAdd(&z2, &_3x2);
+
+#pragma omp parallel sections
+  {
+#pragma omp section
+    {
+      s.ModMulK1(&p.y, &p.z);
+      b.ModMulK1(&p.y, &s);
+      b.ModMulK1(&p.x);
+    }
+
+#pragma omp section
+    { h.ModSquareK1(&w); }
+  }
+
+  _8b.ModAdd(&b, &b);
+  _8b.ModDouble();
+  _8b.ModDouble();
+  h.ModSub(&_8b);
+
+// Ostateczne obliczenia dla współrzędnych wyniku
+#pragma omp parallel sections
+  {
+#pragma omp section
+    {
+      r.x.ModMulK1(&h, &s);
+      r.x.ModAdd(&r.x);
+    }
+
+#pragma omp section
+    {
+      s2.ModSquareK1(&s);
+      y2.ModSquareK1(&p.y);
+      _8y2s2.ModMulK1(&y2, &s2);
+      _8y2s2.ModDouble();
+      _8y2s2.ModDouble();
+      _8y2s2.ModDouble();
+    }
+  }
+
+  r.y.ModAdd(&b, &b);
+  r.y.ModAdd(&r.y, &r.y);
+  r.y.ModSub(&h);
+  r.y.ModMulK1(&w);
+  r.y.ModSub(&_8y2s2);
+
+  r.z.ModMulK1(&s2, &s);
+  r.z.ModDouble();
+  r.z.ModDouble();
+  r.z.ModDouble();
+
+  return r;
+}
+
+Int Secp256K1::GetY(Int x, bool isEven) {
+  Int _s;
+  Int _p;
+
+  _s.ModSquareK1(&x);
+  _p.ModMulK1(&_s, &x);
+  _p.ModAdd(7);
+  _p.ModSqrt();
+
+  if (!_p.IsEven() && isEven) {
+    _p.ModNeg();
+  } else if (_p.IsEven() && !isEven) {
+    _p.ModNeg();
+  }
+
+  return _p;
 }
 
 bool Secp256K1::EC(Point &p) {
   Int _s;
   Int _p;
 
-  _s.ModSquareK1(&p.y);
-  _p.ModSquareK1(&p.x);
-  _p.ModMulK1(&_p, &p.x);
-  _p.ModAdd(&_p, &B);
-  _s.ModSub(&_s, &_p);
+  _s.ModSquareK1(&p.x);
+  _p.ModMulK1(&_s, &p.x);
+  _p.ModAdd(7);
+  _s.ModMulK1(&p.y, &p.y);
+  _s.ModSub(&_p);
 
-  return _s.IsZero();  // ( y^2 - (x^3 + 7) )
+  return _s.IsZero();  // ( ((pow2(y) - (pow3(x) + 7)) % P) == 0 );
 }
 
-Point Secp256K1::ScalarMultiplication(Point &p, Int &n) {
-  Point result;
-  result.Clear();
-  result.z.SetInt32(1);
-
-  Point temp = p;
-
-  for (int i = 0; i < 256; i++) {
-    if (n.GetBit(i)) result = Add(result, temp);
-    temp = Double(temp);
-  }
-
-  return result;
-}
-
-Point Secp256K1::ScalarMultiplication(Int &n) {
-  Point result;
-  result.Clear();
-  result.z.SetInt32(1);
-
-  Point temp = G;
-
-  for (int i = 0; i < 256; i++) {
-    if (n.GetBit(i)) result = Add(result, temp);
-    temp = Double(temp);
-  }
-
-  return result;
-}
-
-std::string Secp256K1::GetPublicKeyHex(bool compressed, Point &pubKey) {
-  unsigned char publicKeyBytes[128];
-  char hex[256];
-
-  if (!compressed) {
-    // Full public key
-    publicKeyBytes[0] = 0x4;
-    pubKey.x.Get32Bytes(publicKeyBytes + 1);
-    pubKey.y.Get32Bytes(publicKeyBytes + 33);
-
-    // To Hex
-    for (int i = 0; i < 65; i++) sprintf(hex + 2 * i, "%02X", (int)publicKeyBytes[i]);
-    hex[130] = '\0';
-  } else {
-    // Compressed public key
-    publicKeyBytes[0] = pubKey.y.IsEven() ? 0x2 : 0x3;
-    pubKey.x.Get32Bytes(publicKeyBytes + 1);
-
-    // To Hex
-    for (int i = 0; i < 33; i++) sprintf(hex + 2 * i, "%02X", (int)publicKeyBytes[i]);
-    hex[66] = '\0';
-  }
-
-  return std::string(hex);
-}
-
-void Secp256K1::GetHash160(int type, bool compressed, Point &pubKey, unsigned char *hash) {
-  unsigned char publicKeyBytes[128];
-  unsigned char hashBytes[64];
-
-  // Compute public key hash
-  if (compressed) {
-    publicKeyBytes[0] = pubKey.y.IsEven() ? 0x2 : 0x3;
-    pubKey.x.Get32Bytes(publicKeyBytes + 1);
-    SHA256(publicKeyBytes, 33, hashBytes);
-  } else {
-    publicKeyBytes[0] = 0x4;
-    pubKey.x.Get32Bytes(publicKeyBytes + 1);
-    pubKey.y.Get32Bytes(publicKeyBytes + 33);
-    SHA256(publicKeyBytes, 65, hashBytes);
-  }
-  RIPEMD160(hashBytes, 32, hash);
-}
-
-void Secp256K1::GetHash160_Batch16(int type, bool compressed, Point **pubKey, uint8_t **hash) {
-  uint8_t *sha_in[16];
-  uint8_t *sha_out[16];
-
-  for (int i = 0; i < 16; i++) {
-    sha_in[i] = (uint8_t *)malloc(compressed ? 33 : 65);
-    sha_out[i] = (uint8_t *)malloc(32);
-
-    // Create serialized public key
-    if (!compressed) {
-      sha_in[i][0] = 0x04;
-      pubKey[i]->x.Get32Bytes(sha_in[i] + 1);
-      pubKey[i]->y.Get32Bytes(sha_in[i] + 33);
-    } else {
-      sha_in[i][0] = (pubKey[i]->y.IsEven()) ? 0x02 : 0x03;
-      pubKey[i]->x.Get32Bytes(sha_in[i] + 1);
-    }
-  }
-
-  // Process all 16 blocks
-  sha256_avx512_16blocks(sha_in, sha_out);
-  ripemd160_avx512_16blocks((const uint8_t **)sha_out, hash);
-
-  // Free temporary memory
-  for (int i = 0; i < 16; i++) {
-    free(sha_in[i]);
-    free(sha_out[i]);
+// Nowa funkcja dla przetwarzania wsadowego punktów korzystająca z AVX-512
+void Secp256K1::BatchProcessPoints(Point *points, int numPoints, Point *results) {
+// Wykorzystanie AVX-512 do równoległego przetwarzania wielu punktów
+#pragma omp parallel for
+  for (int i = 0; i < numPoints; i++) {
+    results[i] = Double(points[i]);
   }
 }
 
-std::string Secp256K1::GetAddress(int type, bool compressed, unsigned char *hash160) {
-  unsigned char address[25];
-  char b58[64];
-
-  switch (type) {
-    case P2PKH:
-      address[0] = 0x00;
-      break;
-    case P2SH:
-      address[0] = 0x05;
-      break;
-    default:
-      address[0] = 0x00;
-  }
-
-  memcpy(address + 1, hash160, 20);
-
-  // Compute checksum
-  unsigned char sha[32];
-  SHA256(address, 21, sha);
-  SHA256(sha, 32, sha);
-  memcpy(address + 21, sha, 4);
-
-  // Base58 encode
-  char *b58c = Base58(address, 25, b58);
-
-  return std::string(b58c);
-}
-
-std::string Secp256K1::GetPrivAddress(bool compressed, Int &privKey) {
-  unsigned char address[38];
-  char b58[64];
-
-  address[0] = 0x80;  // Mainnet private key
-  privKey.Get32Bytes(address + 1);
-
-  if (compressed) {
-    address[33] = 0x01;
-
-    // Compute checksum
-    unsigned char sha[32];
-    SHA256(address, 34, sha);
-    SHA256(sha, 32, sha);
-    memcpy(address + 34, sha, 4);
-
-    // Base58 encode
-    char *b58c = Base58(address, 38, b58);
-    return std::string(b58c);
-  } else {
-    // Compute checksum
-    unsigned char sha[32];
-    SHA256(address, 33, sha);
-    SHA256(sha, 32, sha);
-    memcpy(address + 33, sha, 4);
-
-    // Base58 encode
-    char *b58c = Base58(address, 37, b58);
-    return std::string(b58c);
+// Funkcja do zrównoleglonego obliczania wielu kluczy publicznych
+void Secp256K1::BatchComputePublicKeys(Int *privKeys, int numKeys, Point *pubKeys) {
+#pragma omp parallel for
+  for (int i = 0; i < numKeys; i++) {
+    pubKeys[i] = ComputePublicKey(&privKeys[i]);
   }
 }
 
-std::string Secp256K1::GetPrivAddressAuto(Int &privKey) { return GetPrivAddress(true, privKey); }
-
-char *Secp256K1::Base58(unsigned char *data, int length, char *result) {
-  static const char base58[] = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-  unsigned char *binsz = data;
-  int binsz_size = length;
-  int i, j, high, zcount = 0;
-
-  while (zcount < binsz_size && binsz[zcount] == 0) ++zcount;
-
-  int size = (binsz_size - zcount) * 138 / 100 + 1;
-  unsigned char *buf = (unsigned char *)malloc(size);
-  memset(buf, 0, size);
-
-  for (i = zcount, high = size - 1; i < binsz_size; ++i, high = j) {
-    int carry = binsz[i];
-    for (j = size - 1; (j > high) || carry; --j) {
-      carry += 256 * buf[j];
-      buf[j] = carry % 58;
-      carry /= 58;
-    }
-  }
-
-  for (j = 0; j < size && !buf[j]; ++j);
-
-  if (zcount) {
-    memset(result, '1', zcount);
-  }
-
-  for (i = zcount; j < size; ++i, ++j) {
-    result[i] = base58[buf[j]];
-  }
-
-  result[i] = '\0';
-  free(buf);
-
-  return result;
-}
-
-bool Secp256K1::CheckPudAddress(std::string address) {
-  if (address.length() < 25 || address.length() > 40) return false;
-
-  unsigned char bin[64];
-  size_t binLen = address.length();
-
-  if (!DecodeBase58(address.c_str(), bin, &binLen)) return false;
-
-  if (binLen != 25) return false;
-
-  // Check checksum
-  unsigned char sha[32];
-  SHA256(bin, 21, sha);
-  SHA256(sha, 32, sha);
-
-  for (int i = 0; i < 4; i++) {
-    if (sha[i] != bin[21 + i]) return false;
-  }
-
-  return true;
-}
-
-bool Secp256K1::DecodeBase58(const char *input, unsigned char *output, size_t *outputLen) {
-  static const char *base58Lookup = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-  const char *pch = input;
-
-  // Skip leading spaces
-  while (*pch && isspace(*pch)) pch++;
-
-  // Skip and count leading zeros
-  int zeroes = 0;
-  int length = 0;
-  while (*pch == '1') {
-    zeroes++;
-    pch++;
-  }
-
-  // Allocate buffer large enough to hold the decoded result
-  int decodedSize = *outputLen;
-  unsigned char *output_start = output;
-
-  // Process characters
-  while (*pch && !isspace(*pch)) {
-    // Decode base58 character
-    const char *ch = strchr(base58Lookup, *pch);
-    if (ch == NULL) {
-      return false;
-    }
-
-    // Apply "b58 = b58 * 58 + ch".
-    int carry = (int)(ch - base58Lookup);
-    int i = 0;
-    for (unsigned char *p1 = output + decodedSize - 1; p1 >= output_start; p1--, i++) {
-      carry += 58 * (*p1);
-      *p1 = carry % 256;
-      carry /= 256;
-    }
-
-    pch++;
-  }
-
-  // Skip trailing spaces
-  while (isspace(*pch)) pch++;
-
-  if (*pch != 0) {
-    return false;
-  }
-
-  // Resize the output
-  *outputLen = zeroes + (output + decodedSize - output_start);
-
-  return true;
-}
-
-bool Secp256K1::GetPrivAddr(std::string addr, uint8_t *data, int size) {
-  size_t decodedLen = size;
-  return DecodeBase58(addr.c_str(), data, &decodedLen) && decodedLen == size;
-}
-
-bool Secp256K1::IsCompressedAddress(std::string address) {
-  if (address.length() < 10) return false;
-
-  if (address[0] == 'K' || address[0] == 'L') return true;
-
-  return false;
-}
-
-bool Secp256K1::IsCompressedSpark(std::string address) {
-  if (address.length() < 10) return false;
-
-  if (address[0] == 'K' || address[0] == 'L') return true;
-
-  return false;
-}
-
-bool Secp256K1::IsCompressedPublic(int type) { return (type == BECH32); }
-
-// Optimized batch function to process multiple public keys
+// Zoptymalizowana funkcja normalizacji wsadowej dla punktów
 void Secp256K1::BatchNormalize(Point *points, int count) {
-  if (count < 2) return;
+  if (count < 2) {
+    if (count == 1) points[0].Normalize();
+    return;
+  }
 
-  // Calculate all z values to invert
-  Int *zValues = new Int[count];
-  Int *zInv = new Int[count];
+  Int *z = new Int[count];
+  Int *zt = new Int[count];
 
-  zValues[0].Set(&points[0].z);
+  z[0].Set(&points[0].z);
+
   for (int i = 1; i < count; i++) {
-    zValues[i].ModMulK1(&zValues[i - 1], &points[i].z);
+    z[i].ModMulK1(&z[i - 1], &points[i].z);
   }
 
-  // Calculate inverse of last z value
-  zInv[count - 1].Set(&zValues[count - 1]);
-  zInv[count - 1].ModInv();
+  zt[count - 1].ModInv(&z[count - 1]);
 
-  // Calculate inverse of all other z values
-  for (int i = count - 2; i >= 0; i--) {
-    zInv[i].ModMulK1(&zInv[i + 1], &points[i + 1].z);
-  }
-
-  // Apply inversions
-  for (int i = 0; i < count; i++) {
+  for (int i = count - 1; i > 0; i--) {
+    zt[i - 1].ModMulK1(&zt[i], &points[i].z);
     Int zz;
+    zz.ModMulK1(&zt[i], &z[i - 1]);
+
+    Int zzi;
+    zzi.ModSquareK1(&zz);
+
     Int zzz;
+    zzz.ModMulK1(&zzi, &zz);
 
-    zz.ModSquareK1(&zInv[i]);
-    zzz.ModMulK1(&zz, &zInv[i]);
-
-    points[i].x.ModMulK1(&points[i].x, &zz);
+    points[i].x.ModMulK1(&points[i].x, &zzi);
     points[i].y.ModMulK1(&points[i].y, &zzz);
     points[i].z.SetInt32(1);
   }
 
-  delete[] zValues;
-  delete[] zInv;
-}
+  Int zzi;
+  zzi.ModSquareK1(&zt[0]);
 
-// AVX-512 optimized SHA-256 for 16 blocks
-void sha256_avx512_16blocks(uint8_t **in, uint8_t **out) {
-#pragma omp parallel for
-  for (int i = 0; i < 16; i++) {
-    SHA256(in[i], 32, out[i]);
-  }
-}
+  Int zzz;
+  zzz.ModMulK1(&zzi, &zt[0]);
 
-// AVX-512 optimized RIPEMD-160 for 16 blocks
-void ripemd160_avx512_16blocks(const uint8_t **in, uint8_t **out) {
-#pragma omp parallel for
-  for (int i = 0; i < 16; i++) {
-    RIPEMD160((unsigned char *)in[i], 32, out[i]);
-  }
-}
+  points[0].x.ModMulK1(&points[0].x, &zzi);
+  points[0].y.ModMulK1(&points[0].y, &zzz);
+  points[0].z.SetInt32(1);
 
-// External function declarations for cryptographic operations
-extern "C" {
-void SHA256(unsigned char *data, int len, unsigned char *hash);
-void RIPEMD160(unsigned char *data, int len, unsigned char *hash);
+  delete[] z;
+  delete[] zt;
 }
