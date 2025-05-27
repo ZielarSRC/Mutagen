@@ -4,7 +4,7 @@
 #include <omp.h>
 #include <tbb/concurrent_queue.h>
 #include <tbb/parallel_for.h>
-#include <tbb/task_scheduler_init.h>
+#include <tbb/global_control.h>
 
 #include <algorithm>
 #include <array>
