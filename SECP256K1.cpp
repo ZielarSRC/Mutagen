@@ -1,25 +1,39 @@
+#include <immintrin.h>
 #include <omp.h>
 
 #include <algorithm>
 #include <cstring>
 #include <iomanip>
 #include <sstream>
+#include <thread>
 #include <vector>
 
 #include "SECP256K1.h"
 #include "ripemd160_avx512.h"
 #include "sha256_avx512.h"
 
+// Globalna stała dla optymalizacji dostępu
 static Int SECP256K1_P([] {
   Int p;
   p.SetBase16("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F");
   return p;
 }());
 
+// Generator table - wyrównany do cache line (64 bytes)
+alignas(64) Point GTable[256 * 32];
+
 Secp256K1::Secp256K1() {}
 Secp256K1::~Secp256K1() {}
 
 void Secp256K1::Init() {
+  // Konfiguracja OpenMP dla Intel Xeon Platinum 8488C
+  const int max_threads = std::min(120, (int)std::thread::hardware_concurrency());
+  omp_set_num_threads(max_threads);
+  omp_set_dynamic(0);
+
+  // Prefetch dla optymalizacji pamięci
+  __builtin_prefetch(&GTable[0], 1, 3);
+
   Int P;
   P.SetBase16("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F");
   Int::SetupField(&P);
@@ -30,17 +44,40 @@ void Secp256K1::Init() {
   order.SetBase16("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141");
   Int::InitK1(&order);
 
-#pragma omp parallel for schedule(static)
-  for (int i = 0; i < 32; ++i) {
-    Point N(G);
-    for (int d = 0; d < i; ++d) N = DoubleDirect(N);
+  // KROK 1: Sekwencyjne przygotowanie punktów bazowych - KRYTYCZNE!
+  // To musi być sekwencyjne, bo każdy punkt zależy od poprzedniego
+  alignas(64) Point basePoints[32];
+  Point N(G);
 
-    GTable[i * 256] = N;
-    for (int j = 1; j < 256; ++j) {
-      N = AddDirect(N, GTable[i * 256]);
-      GTable[i * 256 + j] = N;
+  for (int i = 0; i < 32; i++) {
+    basePoints[i] = N;
+    if (i < 31) {  // Unikamy zbędnego podwojenia dla ostatniego elementu
+      N = DoubleDirect(N);
     }
   }
+
+// KROK 2: Równoległe budowanie każdej sekcji tabeli
+// Każdy wątek pracuje na niezależnej sekcji - brak race conditions
+#pragma omp parallel for schedule(dynamic, 1) num_threads(32)
+  for (int i = 0; i < 32; ++i) {
+    Point localN = basePoints[i];
+    const Point &basePoint = basePoints[i];
+
+    // Prefetch dla tej sekcji tabeli
+    __builtin_prefetch(&GTable[i * 256], 1, 3);
+
+    GTable[i * 256] = localN;
+
+    // Budowanie pozostałych elementów w tej sekcji
+    for (int j = 1; j < 256; ++j) {
+      localN = AddDirect(localN, basePoint);
+      GTable[i * 256 + j] = localN;
+    }
+  }
+
+  // Reset OpenMP do domyślnych ustawień
+  omp_set_num_threads(max_threads);
+  omp_set_dynamic(1);
 }
 
 Point Secp256K1::AddDirect(Point &p1, Point &p2) {
@@ -204,22 +241,38 @@ Point Secp256K1::Double(Point &p) {
 }
 
 Point Secp256K1::ComputePublicKey(Int *privKey) {
+  // POPRAWKA: Sekwencyjne obliczanie bez race conditions
   Point Q;
   Q.Clear();
-#pragma omp parallel for
-  for (int i = 0; i < 32; ++i) {
-    uint8_t b = privKey->GetByte(i);
+
+  // Znajdź pierwszy znaczący bajt
+  int firstByte = 0;
+  uint8_t b = 0;
+  for (int i = 0; i < 32; i++) {
+    b = privKey->GetByte(i);
     if (b) {
-      Point local = GTable[i * 256 + (b - 1)];
-#pragma omp critical
-      {
-        if (Q.z.IsZero())
-          Q = local;
-        else
-          Q = Add2(Q, local);
-      }
+      firstByte = i;
+      break;
     }
   }
+
+  // Jeśli wszystkie bajty to 0, zwróć punkt w nieskończoności
+  if (b == 0) {
+    Q.Clear();
+    return Q;
+  }
+
+  // Ustaw pierwszy punkt
+  Q = GTable[firstByte * 256 + (b - 1)];
+
+  // Dodaj pozostałe punkty sekwencyjnie
+  for (int i = firstByte + 1; i < 32; i++) {
+    b = privKey->GetByte(i);
+    if (b) {
+      Q = Add2(Q, GTable[i * 256 + (b - 1)]);
+    }
+  }
+
   Q.Reduce();
   return Q;
 }
@@ -255,12 +308,15 @@ void Secp256K1::GetHash160_Batch16(int type, bool compressed, Point *pubkeys[16]
   alignas(64) uint8_t pubkey_ser[16][33];
   const uint8_t *in[16];
   uint8_t *out[16];
-#pragma omp parallel for
+
+// Optymalizacja równoległa dla serializacji z lepszym load balancing
+#pragma omp parallel for schedule(static, 2) if (omp_get_max_threads() >= 8)
   for (int i = 0; i < 16; ++i) {
     SerializePublicKey(*pubkeys[i], compressed, pubkey_ser[i]);
     in[i] = pubkey_ser[i];
     out[i] = hashes[i];
   }
+
   alignas(64) uint8_t sha[16][32];
   const uint8_t *sha_in[16];
   uint8_t *sha_out[16];
