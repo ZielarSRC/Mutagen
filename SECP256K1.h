@@ -31,46 +31,42 @@ class Secp256K1 {
   bool EC(Point &p);
   Point ScalarMultiplication(Point &p, Int &n);
   Point ScalarMultiplication(Int &n);
-  Point DoubleAndAdd(Point &p, Int &n);
-  __attribute__((target("avx512f"))) Point DoubleAndAddAVX512(Point &p, Int &n);
 
-  // Decoder
-  bool CheckPudAddress(std::string address);
-  bool DecodePrivateKey(std::string key, Int *privateKey);
+  // Batch operations
+  void BatchNormalize(Point *points, int count);
+
+  // Address handling
   std::string GetAddress(int type, bool compressed, unsigned char *hash160);
-  std::string GetBech32Address(bool compressed, Point &pubKey);
   std::string GetPrivAddressAuto(Int &privKey);
+  bool CheckPudAddress(std::string address);
 
-  // Address format
-  static int GetPrivAddressType(std::string address);
-  static int GetPublicAddressType(std::string address);
-  static std::string GetPublicBase58(uint8_t *hash160, int addressType);
-  static std::string GetPrivBase58(uint8_t *data, int size);
+  // Base58 encoding/decoding functions
+  char *Base58(unsigned char *data, int length, char *result);
+  bool DecodeBase58(const char *input, unsigned char *output, size_t *outputLen);
   static bool GetPrivAddr(std::string addr, uint8_t *data, int size);
+
+  // Utility functions
   static bool IsCompressedAddress(std::string address);
   static bool IsCompressedSpark(std::string address);
   static bool IsCompressedPublic(int type);
-
-  // Xeon Platinum 8488C optimized functions
-  __attribute__((target("avx512f"))) void BatchNormalize(Point *points, int count);
 
   // Public curve parameters
   Int P;    // Prime for the finite field
   Int N;    // Curve order
   Int B;    // Curve parameter
   Point G;  // Generator point
+  Int _a;   // a coefficient (0 for secp256k1)
 
  private:
   Int _Gx;  // Generator x coordinate
   Int _Gy;  // Generator y coordinate
-  Int _Af;  // a coefficient (0 for secp256k1)
 };
 
-// SHA256 and RIPEMD160 functions
+// Hash functions
 void SHA256(unsigned char *data, int len, unsigned char *hash);
 void RIPEMD160(unsigned char *data, int len, unsigned char *hash);
 
-// Batch processing functions
+// Optimized hash functions for AVX-512
 void sha256_avx512_16blocks(uint8_t **in, uint8_t **out);
 void ripemd160_avx512_16blocks(const uint8_t **in, uint8_t **out);
 
