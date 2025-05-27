@@ -627,7 +627,7 @@ static void computeHash160BatchBinSingle(int numKeys, uint8_t pubKeys[][33],
     }
 
     // Use optimized RIPEMD-160 implementation for AVX-512
-    ripemd160avx2::ripemd160_320_8way(
+    ripemd160avx512::ripemd160avx512_32x32(
         (unsigned char*)inPtr[0], (unsigned char*)inPtr[1], (unsigned char*)inPtr[2],
         (unsigned char*)inPtr[3], (unsigned char*)inPtr[4], (unsigned char*)inPtr[5],
         (unsigned char*)inPtr[6], (unsigned char*)inPtr[7], outPtr[0], outPtr[1], outPtr[2],
