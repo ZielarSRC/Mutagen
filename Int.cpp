@@ -1908,4 +1908,4 @@ uint64_t Int::Mult(Int *a, uint32_t b) {
       }
 
       // Prefetch data into cache
-      void Int::Prefetch(int hint) const { _mm_prefetch((const char *)bits64, hint); }
+      void Int::Prefetch(int hint) const { _mm_prefetch((const char *)bits64, (_mm_hint)hint); }
