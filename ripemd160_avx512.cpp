@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <stdexcept>
 
 #include "ripemd160_avx512.h"
 
@@ -35,27 +36,48 @@ static const unsigned char pad[128] = {0x80};
 #define R52(a, b, c, d, e, x, r) Round(a, b, c, d, e, f1(b, c, d), x, 0, r)
 
 // Safe version using union to avoid strict-aliasing violations
-#define LOADW(i) ({                                                                             \
-  union { uint32_t u32; uint8_t u8[4]; } conv[16];                                             \
-  for (int j = 0; j < 16; ++j) {                                                                \
-    std::memcpy(conv[j].u8, blk[j] + (i * 4), 4);                                              \
-  }                                                                                             \
-  _mm512_set_epi32(conv[0].u32, conv[1].u32, conv[2].u32, conv[3].u32, conv[4].u32, conv[5].u32, \
-                   conv[6].u32, conv[7].u32, conv[8].u32, conv[9].u32, conv[10].u32, conv[11].u32, \
-                   conv[12].u32, conv[13].u32, conv[14].u32, conv[15].u32);                    \
-})
+#define LOADW(i)                                                                                   \
+  ({                                                                                               \
+    union {                                                                                        \
+      uint32_t u32;                                                                                \
+      uint8_t u8[4];                                                                               \
+    } conv[16];                                                                                    \
+    for (int j = 0; j < 16; ++j) {                                                                 \
+      if (blk[j]) {                                                                                \
+        std::memcpy(conv[j].u8, blk[j] + (i * 4), 4);                                              \
+      } else {                                                                                     \
+        conv[j].u32 = 0;                                                                           \
+      }                                                                                            \
+    }                                                                                              \
+    _mm512_set_epi32(conv[0].u32, conv[1].u32, conv[2].u32, conv[3].u32, conv[4].u32, conv[5].u32, \
+                     conv[6].u32, conv[7].u32, conv[8].u32, conv[9].u32, conv[10].u32,             \
+                     conv[11].u32, conv[12].u32, conv[13].u32, conv[14].u32, conv[15].u32);        \
+  })
 
-// Fixed DEPACK - extract from each of the 5 state vectors
-#define DEPACK(d, i) do {                                      \
-  union { uint32_t u32[16]; __m512i vec; } temp;              \
-  temp.vec = s[0]; std::memcpy((uint8_t*)d + 0,  &temp.u32[i], 4); \
-  temp.vec = s[1]; std::memcpy((uint8_t*)d + 4,  &temp.u32[i], 4); \
-  temp.vec = s[2]; std::memcpy((uint8_t*)d + 8,  &temp.u32[i], 4); \
-  temp.vec = s[3]; std::memcpy((uint8_t*)d + 12, &temp.u32[i], 4); \
-  temp.vec = s[4]; std::memcpy((uint8_t*)d + 16, &temp.u32[i], 4); \
-} while(0)
+// Fixed DEPACK - extract from each of the 5 state vectors with bounds checking
+#define DEPACK(d, i)                                  \
+  do {                                                \
+    if (d && i >= 0 && i < 16) {                      \
+      union {                                         \
+        uint32_t u32[16];                             \
+        __m512i vec;                                  \
+      } temp;                                         \
+      temp.vec = s[0];                                \
+      std::memcpy((uint8_t*)d + 0, &temp.u32[i], 4);  \
+      temp.vec = s[1];                                \
+      std::memcpy((uint8_t*)d + 4, &temp.u32[i], 4);  \
+      temp.vec = s[2];                                \
+      std::memcpy((uint8_t*)d + 8, &temp.u32[i], 4);  \
+      temp.vec = s[3];                                \
+      std::memcpy((uint8_t*)d + 12, &temp.u32[i], 4); \
+      temp.vec = s[4];                                \
+      std::memcpy((uint8_t*)d + 16, &temp.u32[i], 4); \
+    }                                                 \
+  } while (0)
 
 static void Initialize(__m512i* s) {
+  if (!s) return;
+
   alignas(64) static const uint32_t init[] = {
       // 16xA
       0x67452301, 0x67452301, 0x67452301, 0x67452301, 0x67452301, 0x67452301, 0x67452301,
@@ -81,6 +103,8 @@ static void Initialize(__m512i* s) {
 }
 
 static void Transform(__m512i* s, uint8_t* blk[16]) {
+  if (!s || !blk) return;
+
   __m512i a1 = _mm512_load_si512(s + 0);
   __m512i b1 = _mm512_load_si512(s + 1);
   __m512i c1 = _mm512_load_si512(s + 2);
@@ -266,12 +290,17 @@ static void Transform(__m512i* s, uint8_t* blk[16]) {
 }
 
 static void ripemd160avx512_16(uint8_t* in[16], uint8_t* out[16]) {
+  if (!in || !out) return;
+
   __m512i s[5];
   Initialize(s);
 
+  // Safety check and padding with null pointer protection
   for (int i = 0; i < 16; ++i) {
-    std::memcpy(in[i] + 64, pad, 56);
-    std::memcpy(in[i] + 120, &sizedesc_64, 8);
+    if (in[i]) {
+      std::memcpy(in[i] + 64, pad, 56);
+      std::memcpy(in[i] + 120, &sizedesc_64, 8);
+    }
   }
 
   Transform(s, in);
@@ -295,12 +324,16 @@ static void ripemd160avx512_16(uint8_t* in[16], uint8_t* out[16]) {
 }
 
 extern "C" void ripemd160_avx512_16blocks(const uint8_t* in[16], uint8_t* out[16]) {
+  if (!in || !out) return;
+
   uint8_t* in_mut[16];
   for (int i = 0; i < 16; ++i) in_mut[i] = const_cast<uint8_t*>(in[i]);
   ripemd160avx512_16(in_mut, out);
 }
 
 extern "C" void ripemd160_avx512_8blocks(const uint8_t* in[8], uint8_t* out[8]) {
+  if (!in || !out) return;
+
   alignas(64) uint8_t zero[128] = {0};
   const uint8_t* in16[16];
   uint8_t* out16[16];
@@ -316,6 +349,8 @@ extern "C" void ripemd160_avx512_8blocks(const uint8_t* in[8], uint8_t* out[8]) 
 }
 
 extern "C" void ripemd160_avx512_1block(const uint8_t* in, uint8_t* out) {
+  if (!in || !out) return;
+
   const uint8_t* in1[16] = {0};
   uint8_t* out1[16] = {0};
   in1[0] = in;
@@ -324,6 +359,8 @@ extern "C" void ripemd160_avx512_1block(const uint8_t* in, uint8_t* out) {
 }
 
 extern "C" void ripemd160_avx512_32blocks(const uint8_t* in[32], uint8_t* out[32]) {
+  if (!in || !out) return;
+
   alignas(64) uint8_t zero[128] = {0};
   const uint8_t* in16a[16];
   const uint8_t* in16b[16];
