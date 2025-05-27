@@ -600,6 +600,7 @@ static void computeHash160BatchBinSingle(int numKeys, uint8_t pubKeys[][33],
 
     // Use optimized SHA-256 implementation for AVX-512
     sha256avx512_8B(inPtr[0], inPtr[1], inPtr[2], inPtr[3], inPtr[4], inPtr[5], inPtr[6], inPtr[7],
+                outPtr[0], outPtr[1], outPtr[2], outPtr[3], outPtr[4], outPtr[5], outPtr[6], outPtr[7]);
 
     for (__uint128_t i = 0; i < batchCount; i++) {
       // Prefetch next output data to L1 cache
@@ -627,7 +628,7 @@ static void computeHash160BatchBinSingle(int numKeys, uint8_t pubKeys[][33],
     }
 
     // Use optimized RIPEMD-160 implementation for AVX-512
-    ripemd160avx512::ripemd160avx512_32x32(
+    ripemd160avx512::ripemd160avx512_8x32(
         (unsigned char*)inPtr[0], (unsigned char*)inPtr[1], (unsigned char*)inPtr[2],
         (unsigned char*)inPtr[3], (unsigned char*)inPtr[4], (unsigned char*)inPtr[5],
         (unsigned char*)inPtr[6], (unsigned char*)inPtr[7], outPtr[0], outPtr[1], outPtr[2],
