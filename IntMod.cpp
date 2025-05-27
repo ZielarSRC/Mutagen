@@ -370,16 +370,17 @@ void Int::DivStep62(Int *u, Int *v, int64_t *eta, int *pos, int64_t *uu, int64_t
     __m128i t_v = _v;
 
     // Compute conditional swaps using AVX-512 blend operations
-    _mm_mask_blend_epi64(mask, _u, _v);
-    _mm_mask_blend_epi64(mask, _v, t_u);
+    __mmask8 mask8 = _mm_movemask_pd(_mm_castsi128_pd(mask)); // Extract mask bits
+    _mm_mask_blend_epi64(mask8, _u, _v);
+    _mm_mask_blend_epi64(mask8, _v, t_u);
 
     // Also swap uh/vh and u0/v0
     w = vh;
     x = v0;
-    vh = _mm_mask_blend_epi64(mask, vh, uh);
-    v0 = _mm_mask_blend_epi64(mask, v0, u0);
-    uh = _mm_mask_blend_epi64(mask, uh, w);
-    u0 = _mm_mask_blend_epi64(mask, u0, x);
+    vh = _mm_mask_blend_epi64(mask8, vh, uh);
+    v0 = _mm_mask_blend_epi64(mask8, v0, u0);
+    uh = _mm_mask_blend_epi64(mask8, uh, w);
+    u0 = _mm_mask_blend_epi64(mask8, u0, x);
 
     // Perform subtraction
     vh -= uh;
