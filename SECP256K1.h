@@ -28,7 +28,7 @@ class Secp256K1 {
   std::string GetPublicKeyHex(bool compressed, Point &p);
   Point ParsePublicKeyHex(std::string str, bool &isCompressed);
   bool CheckPudAddress(std::string address);
-  Int DecodePrivateKey(char *key, bool *compressed);
+  static Int DecodePrivateKey(char *key, bool *compressed);
 
   Point AddDirect(Point &p1, Point &p2);
   Point DoubleDirect(Point &p);
@@ -38,8 +38,16 @@ class Secp256K1 {
   bool EC(Point &p);
   Int GetY(Int x, bool isEven);
 
+  // Public members - zgodnie z działającą wersją
+  Point G;    // Generator point
+  Int order;  // Curve order
+
  private:
   void SerializePublicKey(Point &pubKey, bool compressed, uint8_t *out33);
+  uint8_t GetByte(std::string &str, int idx);
+
+  // Generator table - wyrównany do cache line
+  alignas(64) Point GTable[256 * 32];
 };
 
 #endif  // SECP256K1_H
